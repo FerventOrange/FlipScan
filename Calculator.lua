@@ -52,7 +52,7 @@ end
 --- Get a reference (market) price for an item, checking sources in priority order.
 --
 -- Priority:
---   1. Auctioneer's market value (most reliable when available)
+--   1. Auctionator's auction price (market data from recent scans)
 --   2. Vendor sell price as an absolute floor fallback
 --
 -- @param itemLink (string) A WoW item link.
@@ -63,11 +63,14 @@ function FlipScan.Calculator.GetReferencePrice(itemLink)
         return nil, "none"
     end
 
-    -- Source 1: Auctioneer market value
-    if AucAdvanced and AucAdvanced.API and AucAdvanced.API.GetMarketValue then
-        local marketValue = AucAdvanced.API.GetMarketValue(itemLink)
-        if marketValue and marketValue > 0 then
-            return marketValue, "Auctioneer"
+    -- Source 1: Auctionator auction price
+    if Auctionator and Auctionator.API and Auctionator.API.v1
+            and Auctionator.API.v1.GetAuctionPriceByItemLink then
+        local ok, atrPrice = pcall(
+            Auctionator.API.v1.GetAuctionPriceByItemLink, "FlipScan", itemLink
+        )
+        if ok and atrPrice and atrPrice > 0 then
+            return atrPrice, "Auctionator"
         end
     end
 

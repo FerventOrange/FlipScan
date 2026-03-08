@@ -1,6 +1,6 @@
 # FlipScan
 
-A World of Warcraft retail addon that analyzes Auction House listings in real time and visually marks items that are profitable to flip after accounting for the 5% AH transaction cut. Designed as a companion to the **Auctioneer** addon suite.
+A World of Warcraft retail addon that analyzes Auction House listings in real time and visually marks items that are profitable to flip after accounting for the 5% AH transaction cut. Works best with **Auctionator** for market pricing data.
 
 **FlipScan is read-only and display-only.** It never automatically buys, sells, or posts auctions.
 
@@ -11,7 +11,7 @@ A World of Warcraft retail addon that analyzes Auction House listings in real ti
    ```
    World of Warcraft/_retail_/Interface/AddOns/FlipScan/
    ```
-3. Ensure **Auctioneer** is also installed (required dependency). FlipScan will run in a limited standalone mode without it.
+3. For best results, install **Auctionator** (optional but recommended). FlipScan will run standalone using vendor prices only if Auctionator is not present.
 4. Restart WoW or type `/reload` in-game.
 
 ## Features
@@ -54,7 +54,7 @@ An item is flagged as "flippable" when `Margin % >= your configured minimum marg
 
 ### Price Reference Sources (priority order)
 
-1. **Auctioneer market value** (`AucAdvanced.API.GetMarketValue`) — most reliable when Auctioneer has scan data
+1. **Auctionator market price** (`Auctionator.API.v1.GetAuctionPriceByItemLink`) — market data from recent AH scans
 2. **Vendor sell price** — absolute floor fallback from `GetItemInfo`
 
 ## Configuration
@@ -72,8 +72,8 @@ Settings persist across `/reload` and login/logout via SavedVariables.
 ## Known Limitations
 
 - **Deposit costs are not factored in.** The AH deposit (refunded on successful sale) is not subtracted from profit calculations. For expensive items with long listing durations, actual profit may be slightly lower.
-- **Commodity pricing** relies on Auctioneer's market value or vendor price. Real-time commodity undercuts are not tracked.
-- **Auctioneer scan freshness** — FlipScan is only as accurate as Auctioneer's last scan. Stale market data will produce stale flip recommendations.
+- **Commodity pricing** relies on Auctionator market data or vendor price. Real-time commodity undercuts are not tracked.
+- **Price data freshness** — FlipScan is only as accurate as Auctionator's last scan. Stale market data will produce stale flip recommendations.
 - **No Classic/Wrath support.** Targets the retail WoW API (`C_AuctionHouse`).
 
 ## Extending with New Price Sources
@@ -98,7 +98,7 @@ FlipScan/
 ├── FlipScan.lua          # Init, event registration, namespace setup
 ├── Config.lua            # SavedVariables, defaults, get/set helpers
 ├── Calculator.lua        # Pure profit math, no UI dependencies
-├── AuctioneerHook.lua    # Hook layer into Auctioneer/Blizzard AH result rows
+├── AuctioneerHook.lua    # Hook layer into Blizzard AH result rows
 ├── Overlay.lua           # Frame pool, texture coloring per row
 ├── Tooltip.lua           # GameTooltip profit injection
 ├── Commands.lua          # /flipscan slash command handler
