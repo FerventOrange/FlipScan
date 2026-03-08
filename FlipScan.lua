@@ -1,10 +1,10 @@
 -- FlipScan: AH Flip Profitability Scanner
 -- Highlights profitable flip opportunities on AH listings.
--- Works with Auctioneer, Auctionator, or standalone (vendor prices only).
+-- Works with Auctionator or standalone (vendor prices only).
 
 -- Global addon namespace
 FlipScan = FlipScan or {}
-FlipScan.version = "0.2.0"
+FlipScan.version = "0.3.0"
 
 -- Sub-namespaces for each module
 FlipScan.Config = {}
@@ -18,8 +18,7 @@ FlipScan.SettingsPanel = {}
 -- Debug state (toggled at runtime, not persisted)
 FlipScan.debugMode = false
 
--- Track which price source addons are present
-FlipScan.hasAuctioneer = false
+-- Track whether Auctionator is present
 FlipScan.hasAuctionator = false
 
 -- Addon event frame
@@ -53,8 +52,7 @@ end
 
 --- Called once when FlipScan finishes loading.
 function FlipScan:OnAddonLoaded()
-    -- Detect available price source addons
-    self.hasAuctioneer = (AucAdvanced ~= nil)
+    -- Detect Auctionator
     self.hasAuctionator = (Auctionator ~= nil)
 
     -- Initialize SavedVariables / config
@@ -89,13 +87,9 @@ function FlipScan:OnAddonLoaded()
         if self.Tooltip and self.Tooltip.Init then self.Tooltip:Init() end
     end)
 
-    -- Report load status with detected price sources
-    local sources = {}
-    if self.hasAuctioneer then sources[#sources + 1] = "Auctioneer" end
-    if self.hasAuctionator then sources[#sources + 1] = "Auctionator" end
-
-    if #sources > 0 then
-        self:Print("v" .. self.version .. " loaded. Price sources: " .. table.concat(sources, ", "))
+    -- Report load status
+    if self.hasAuctionator then
+        self:Print("v" .. self.version .. " loaded. Price source: Auctionator")
     else
         self:Print("v" .. self.version .. " loaded (standalone mode — vendor prices only).")
     end

@@ -36,7 +36,7 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
     if not FlipScan.Config:Get("showTooltipDetail") then return end
 
     -- Only inject in AH context — check if the tooltip's owner is part of
-    -- the AuctionHouseFrame hierarchy or an Auctioneer frame
+    -- the AuctionHouseFrame hierarchy
     if not self:IsAuctionHouseContext(tooltip) then return end
 
     -- Get the item link from the tooltip
@@ -106,10 +106,8 @@ function FlipScan.Tooltip:IsAuctionHouseContext(tooltip)
         if not frame then break end
         local name = frame:GetName()
         if name then
-            -- Match Auctioneer frames or Blizzard's native AH frame
-            if name:find("AuctionFrame") or
-               name:find("AucAdvanced") or
-               name:find("AuctionHouseFrame") or
+            if name:find("AuctionHouseFrame") or
+               name:find("AuctionFrame") or
                name:find("Browse") then
                 return true
             end
@@ -124,12 +122,6 @@ end
 function FlipScan.Tooltip:GetBuyoutFromOwner(tooltip)
     local owner = tooltip:GetOwner()
     if not owner then return nil end
-
-    -- Auctioneer-style buttons store buyoutPrice directly
-    if owner.buyoutPrice then
-        local count = owner.count or 1
-        return owner.buyoutPrice / count
-    end
 
     -- Blizzard native AH rows may store result info
     if owner.rowData and owner.rowData.buyoutAmount then
