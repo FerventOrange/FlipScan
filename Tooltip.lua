@@ -30,34 +30,18 @@ function FlipScan.Tooltip:Init()
 end
 
 --- Called when a tooltip is about to display an item.
--- Only injects data when the tooltip owner is an AH-context frame.
+-- Only injects data when the tooltip owner is an AH-context frame with FlipScan data.
 function FlipScan.Tooltip:OnTooltipItem(tooltip)
     if not FlipScan.Config:Get("enabled") then return end
     if not FlipScan.Config:Get("showTooltipDetail") then return end
 
-    -- Only inject in AH context — check if the tooltip's owner is part of
-    -- the AuctionHouseFrame hierarchy
-    if not self:IsAuctionHouseContext(tooltip) then return end
-
-    -- Get the item link from the tooltip
-    local _, itemLink = tooltip:GetItem()
-    if not itemLink then return end
-
-    -- Look up the reference (market) price
-    local refPrice, source = FlipScan.Calculator.GetReferencePrice(itemLink)
-    if not refPrice then return end
-
-    -- Try to determine the buyout price from the tooltip's owner row
-    local buyout = self:GetBuyoutFromOwner(tooltip)
-    if not buyout or buyout <= 0 then return end
-
-    -- Calculate flip profitability
-    local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
-    local isFlippable, netProfit, marginPct =
-        FlipScan.Calculator.IsFlippable(buyout, refPrice, minMargin)
+    -- Find the flip data by walking up from the tooltip owner to find
+    -- a frame tagged with _flipScanData by the overlay system.
+    local flipData = self:GetFlipDataFromOwner(tooltip)
+    if not flipData then return end
 
     -- Net proceeds after the 5% AH cut when reselling at market value
-    local netAfterCut = refPrice * FlipScan.Calculator.SELLER_KEEPS
+    local netAfterCut = flipData.referencePrice * FlipScan.Calculator.SELLER_KEEPS
 
     -- Inject lines into the tooltip
     tooltip:AddLine(" ")  -- Blank separator
@@ -65,11 +49,11 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
 
     tooltip:AddDoubleLine(
         LABEL_COLOR .. "  Market Value:" .. RESET_COLOR,
-        FlipScan.Calculator.FormatGold(refPrice) .. " (" .. source .. ")"
+        FlipScan.Calculator.FormatGold(flipData.referencePrice) .. " (" .. flipData.source .. ")"
     )
     tooltip:AddDoubleLine(
         LABEL_COLOR .. "  Your Cost:" .. RESET_COLOR,
-        FlipScan.Calculator.FormatGold(buyout)
+        FlipScan.Calculator.FormatGold(flipData.buyoutPerItem)
     )
     tooltip:AddDoubleLine(
         LABEL_COLOR .. "  Net After 5% Cut:" .. RESET_COLOR,
@@ -79,63 +63,37 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
     -- Profit line with color coding
     local profitStr
     local profitColor
-    if netProfit >= 0 then
-        profitStr = "+" .. FlipScan.Calculator.FormatGold(math.floor(netProfit))
+    if flipData.netProfit >= 0 then
+        profitStr = "+" .. FlipScan.Calculator.FormatGold(math.floor(flipData.netProfit))
         profitColor = PROFIT_COLOR
     else
-        profitStr = "-" .. FlipScan.Calculator.FormatGold(math.floor(math.abs(netProfit)))
+        profitStr = "-" .. FlipScan.Calculator.FormatGold(math.floor(math.abs(flipData.netProfit)))
         profitColor = LOSS_COLOR
     end
 
     tooltip:AddDoubleLine(
         LABEL_COLOR .. "  Est. Profit:" .. RESET_COLOR,
-        profitColor .. profitStr .. string.format("  (%.1f%%)", marginPct) .. RESET_COLOR
+        profitColor .. profitStr .. string.format("  (%.1f%%)", flipData.marginPct) .. RESET_COLOR
     )
 
     tooltip:Show()  -- Resize the tooltip to fit the new lines
 end
 
---- Check if the tooltip is being shown in an Auction House context.
-function FlipScan.Tooltip:IsAuctionHouseContext(tooltip)
-    local owner = tooltip:GetOwner()
-    if not owner then return false end
-
-    -- Walk up the parent chain looking for known AH frame names
-    local frame = owner
-    for _ = 1, 10 do
-        if not frame then break end
-        local name = frame:GetName()
-        if name then
-            if name:find("AuctionHouseFrame") or
-               name:find("AuctionFrame") or
-               name:find("Browse") then
-                return true
-            end
-        end
-        frame = frame:GetParent()
-    end
-
-    return false
-end
-
---- Try to read the buyout price from the tooltip owner's row data.
-function FlipScan.Tooltip:GetBuyoutFromOwner(tooltip)
+--- Walk up the parent chain from the tooltip owner looking for _flipScanData.
+-- The overlay system tags row frames with this table when it applies a color.
+-- @return (table|nil) The flip data, or nil if not in an AH context.
+function FlipScan.Tooltip:GetFlipDataFromOwner(tooltip)
     local owner = tooltip:GetOwner()
     if not owner then return nil end
 
-    -- Blizzard native AH rows may store result info
-    if owner.rowData and owner.rowData.buyoutAmount then
-        return owner.rowData.buyoutAmount
-    end
-
-    -- Check if the owner has an auction ID we can query via the replicate API
-    -- GetReplicateItemInfo returns multiple scalars, not a table
-    if owner.auctionID and C_AuctionHouse and C_AuctionHouse.GetReplicateItemInfo then
-        local _, _, _, _, _, _, _, _, _, buyoutPrice =
-            C_AuctionHouse.GetReplicateItemInfo(owner.auctionID)
-        if buyoutPrice and buyoutPrice > 0 then
-            return buyoutPrice
+    -- Check the owner and its parents (up to 5 levels) for flip data
+    local frame = owner
+    for _ = 1, 5 do
+        if not frame then break end
+        if frame._flipScanData then
+            return frame._flipScanData
         end
+        frame = frame:GetParent()
     end
 
     return nil
