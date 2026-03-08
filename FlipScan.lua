@@ -11,9 +11,14 @@ FlipScan.Calculator = {}
 FlipScan.Overlay = {}
 FlipScan.Hooks = {}
 FlipScan.Commands = {}
+FlipScan.Tooltip = {}
+FlipScan.SettingsPanel = {}
 
 -- Debug state (toggled at runtime, not persisted)
 FlipScan.debugMode = false
+
+-- Track whether Auctioneer is present
+FlipScan.hasAuctioneer = false
 
 -- Addon event frame
 local eventFrame = CreateFrame("Frame", "FlipScanEventFrame")
@@ -31,49 +36,74 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     end
 end)
 
+--- Safely call a function, catching any errors. Logs failures in debug mode.
+-- @param description (string) Human-readable label for what we're initializing.
+-- @param func        (function) The function to call.
+-- @return success    (boolean)
+local function SafeInit(description, func)
+    local ok, err = pcall(func)
+    if not ok then
+        FlipScan:Print("Warning: " .. description .. " failed to initialize.")
+        FlipScan:Debug(description .. " error: " .. tostring(err))
+    end
+    return ok
+end
+
 --- Called once when FlipScan finishes loading.
 function FlipScan:OnAddonLoaded()
-    -- Initialize SavedVariables / config (Goal 2)
-    if self.Config.Init then
-        self.Config:Init()
-    end
+    -- Check for Auctioneer
+    self.hasAuctioneer = (AucAdvanced ~= nil)
 
-    -- Register slash commands (Goal 7)
-    if self.Commands.Init then
-        self.Commands:Init()
-    end
+    -- Initialize SavedVariables / config
+    SafeInit("Config", function()
+        if self.Config.Init then self.Config:Init() end
+    end)
 
-    -- Register settings panel (Goal 8)
-    if self.SettingsPanel and self.SettingsPanel.Init then
-        self.SettingsPanel:Init()
-    end
+    -- Register slash commands
+    SafeInit("Commands", function()
+        if self.Commands.Init then self.Commands:Init() end
+    end)
 
-    -- Hook into Auctioneer (Goal 4)
-    if self.Hooks.Init then
-        self.Hooks:Init()
-    end
+    -- Register settings panel
+    SafeInit("SettingsPanel", function()
+        if self.SettingsPanel and self.SettingsPanel.Init then
+            self.SettingsPanel:Init()
+        end
+    end)
 
-    -- Initialize overlay system (Goal 5)
-    if self.Overlay.Init then
-        self.Overlay:Init()
-    end
+    -- Hook into Auctioneer or Blizzard AH
+    SafeInit("Hooks", function()
+        if self.Hooks.Init then self.Hooks:Init() end
+    end)
 
-    -- Initialize tooltip injection (Goal 6)
-    if self.Tooltip and self.Tooltip.Init then
-        self.Tooltip:Init()
-    end
+    -- Initialize overlay system
+    SafeInit("Overlay", function()
+        if self.Overlay.Init then self.Overlay:Init() end
+    end)
 
-    self:Print("v" .. self.version .. " loaded.")
+    -- Initialize tooltip injection
+    SafeInit("Tooltip", function()
+        if self.Tooltip and self.Tooltip.Init then self.Tooltip:Init() end
+    end)
+
+    -- Report load status
+    if self.hasAuctioneer then
+        self:Print("v" .. self.version .. " loaded. Auctioneer detected.")
+    else
+        self:Print("v" .. self.version .. " loaded (standalone mode — limited price data).")
+    end
 end
 
 --- Print a message to chat prefixed with the addon name.
 function FlipScan:Print(msg)
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFF[FlipScan]|r " .. tostring(msg))
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFF[FlipScan]|r " .. tostring(msg))
+    end
 end
 
 --- Print a debug message (only when debug mode is on).
 function FlipScan:Debug(msg)
-    if self.debugMode then
+    if self.debugMode and DEFAULT_CHAT_FRAME then
         DEFAULT_CHAT_FRAME:AddMessage("|cFF888888[FlipScan Debug]|r " .. tostring(msg))
     end
 end
