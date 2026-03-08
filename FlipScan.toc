@@ -1,4 +1,4 @@
-## Interface: 110002
+## Interface: 120000
 ## Title: FlipScan
 ## Notes: Marks AH listings that are profitable to flip after the 5% AH cut. Auctioneer companion.
 ## Author: FlipScan Contributors
