@@ -1,0 +1,2 @@
+-- FlipScan: Profit Calculation Engine
+-- Placeholder for Goal 3

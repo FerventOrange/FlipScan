@@ -1,0 +1,2 @@
+-- FlipScan: Configuration & SavedVariables
+-- Placeholder for Goal 2

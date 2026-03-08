@@ -1,0 +1,2 @@
+-- FlipScan: Slash Command Interface
+-- Placeholder for Goal 7

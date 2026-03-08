@@ -1,0 +1,2 @@
+-- FlipScan: Visual Overlay System
+-- Placeholder for Goal 5

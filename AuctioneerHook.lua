@@ -1,0 +1,2 @@
+-- FlipScan: Auctioneer Hook Layer
+-- Placeholder for Goal 4

@@ -1,0 +1,2 @@
+-- FlipScan: Tooltip Injection
+-- Placeholder for Goal 6

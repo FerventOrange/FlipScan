@@ -1,0 +1,2 @@
+-- FlipScan: Settings UI Panel
+-- Placeholder for Goal 8
