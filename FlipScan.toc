@@ -1,10 +1,9 @@
 ## Interface: 120000
 ## Title: FlipScan
-## Notes: Marks AH listings that are profitable to flip after the 5% AH cut. Auctioneer companion.
+## Notes: Marks AH listings that are profitable to flip after the 5% AH cut. Works with Auctioneer and/or Auctionator.
 ## Author: FlipScan Contributors
-## Version: 0.1.0
-## Dependencies: Auctioneer
-## OptionalDeps: Blizzard_AuctionHouseUI
+## Version: 0.2.0
+## OptionalDeps: Auctioneer, Auctionator, Blizzard_AuctionHouseUI
 ## SavedVariables: FlipScanDB
 
 FlipScan.lua

@@ -1,21 +1,19 @@
--- FlipScan: Auctioneer Hook Layer
--- Hooks into Auctioneer's result row rendering to feed data to the overlay system.
--- Falls back to Blizzard's native AH frame if Auctioneer is unavailable.
+-- FlipScan: AH Hook Layer
+-- Hooks into Auctioneer and/or Blizzard's AH result row rendering
+-- to feed data to the overlay system.
 
 local FlipScan = FlipScan
 
-local hasAuctioneer = false
-
 --- Initialize the hook system. Called from FlipScan:OnAddonLoaded().
+-- Always hooks Blizzard AH events. Additionally hooks Auctioneer if present.
 function FlipScan.Hooks:Init()
-    hasAuctioneer = (AucAdvanced ~= nil)
+    -- Always hook Blizzard's native AH events as the base layer
+    self:HookBlizzardAH()
 
-    if hasAuctioneer then
-        FlipScan:Debug("Auctioneer detected. Attempting to hook result rows.")
+    -- Additionally hook Auctioneer's result rows if available
+    if FlipScan.hasAuctioneer then
+        FlipScan:Debug("Auctioneer detected. Hooking result rows.")
         self:HookAuctioneer()
-    else
-        FlipScan:Print("Auctioneer not detected. Operating in standalone mode with limited price data.")
-        self:HookBlizzardAH()
     end
 end
 
@@ -107,7 +105,7 @@ function FlipScan.Hooks:ScanVisibleRows()
     local results = {}
 
     -- Try to read from Auctioneer's data first
-    if hasAuctioneer and AucAdvanced and AucAdvanced.API then
+    if FlipScan.hasAuctioneer and AucAdvanced and AucAdvanced.API then
         local ok, data = pcall(function()
             return FlipScan.Hooks:ReadAuctioneerResults()
         end)
