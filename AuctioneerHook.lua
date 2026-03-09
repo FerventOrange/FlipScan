@@ -233,25 +233,33 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
 
     for itemID, rows in pairs(pendingAuctionatorRows) do
-        local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(itemID)
-        if anchorPrice then
-            for _, entry in ipairs(rows) do
-                local isFlippable, netProfit, marginPct =
-                    FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin)
-
-                FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
-                    itemLink = entry.itemLink,
-                    buyoutPerItem = entry.buyoutPerItem,
-                    referencePrice = anchorPrice,
-                    source = "Anchor",
-                    netProfit = netProfit,
-                    marginPct = marginPct,
-                    isFlippable = isFlippable,
-                })
-            end
-        else
+        -- Skip items with only 1 collected row — these are browse/shopping/
+        -- cancelling rows (one row per item). No listing depth to analyze.
+        if #rows < 2 then
             for _, entry in ipairs(rows) do
                 FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
+            end
+        else
+            local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(itemID)
+            if anchorPrice then
+                for _, entry in ipairs(rows) do
+                    local isFlippable, netProfit, marginPct =
+                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin)
+
+                    FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
+                        itemLink = entry.itemLink,
+                        buyoutPerItem = entry.buyoutPerItem,
+                        referencePrice = anchorPrice,
+                        source = "Anchor",
+                        netProfit = netProfit,
+                        marginPct = marginPct,
+                        isFlippable = isFlippable,
+                    })
+                end
+            else
+                for _, entry in ipairs(rows) do
+                    FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
+                end
             end
         end
     end
