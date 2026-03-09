@@ -245,8 +245,6 @@ end
 function FlipScan.Hooks:HookBlizzardAH()
     local hookFrame = CreateFrame("Frame")
     hookFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
-    hookFrame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
-    hookFrame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
     hookFrame:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
     hookFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 
@@ -268,13 +266,11 @@ function FlipScan.Hooks:HookBlizzardAH()
                     FlipScan.Hooks:ScanBlizzardRows()
                 end
             end)
-        else
-            C_Timer.After(0.05, function()
-                if FlipScan.Config:Get("enabled") then
-                    FlipScan.Hooks:ScanBlizzardBrowseRows()
-                end
-            end)
         end
+        -- Browse results (AUCTION_HOUSE_BROWSE_RESULTS_UPDATED/ADDED) are
+        -- intentionally not scanned — the browse list shows one summary row
+        -- per item, not individual listings. There's no listing depth to
+        -- compute a meaningful anchor from.
     end)
 
     FlipScan.Hooks.hookFrame = hookFrame
@@ -289,7 +285,6 @@ function FlipScan.Hooks:TryHookBlizzardScrollBoxes()
         if not FlipScan.Config:Get("enabled") then return end
         C_Timer.After(0.05, function()
             FlipScan.Hooks:ScanBlizzardRows()
-            FlipScan.Hooks:ScanBlizzardBrowseRows()
         end)
     end
 
@@ -300,7 +295,6 @@ function FlipScan.Hooks:TryHookBlizzardScrollBoxes()
         end
     end
 
-    CollectItemList("Browse", AuctionHouseFrame.BrowseResultsFrame)
     CollectItemList("ItemBuy", AuctionHouseFrame.ItemBuyFrame)
 
     if AuctionHouseFrame.CommoditiesBuyFrame and AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay then
@@ -364,14 +358,6 @@ function FlipScan.Hooks:ScanBlizzardRows()
     end
 end
 
---- Scan visible row frames in Blizzard's browse results.
-function FlipScan.Hooks:ScanBlizzardBrowseRows()
-    if not AuctionHouseFrame then return end
-    if not AuctionHouseFrame.BrowseResultsFrame then return end
-
-    self:ScanBlizzardItemList(AuctionHouseFrame.BrowseResultsFrame.ItemList, "Browse")
-end
-
 --- Scan a single Blizzard AuctionHouseItemList for visible row frames.
 -- Two-pass approach: first collect all listings into ListingCollector,
 -- then compute anchor prices and apply overlays.
@@ -381,11 +367,9 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     local frames = itemList.ScrollBox:GetFrames()
     if not frames then return end
 
-    -- Reset collector for this scan
-    FlipScan.ListingCollector:Reset()
-
-    -- Pass 1: Collect all listings
+    -- Pass 1: Collect all non-Auctionator listings
     local rowEntries = {}
+    local resetItems = {}
     for _, rowFrame in ipairs(frames) do
         if rowFrame:IsVisible() and rowFrame.rowData then
             -- Skip Auctionator-managed frames
@@ -394,6 +378,11 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
                 local buyoutPerItem, itemLink, itemID, quantity = self:ExtractBlizzardRowData(rowFrame, rowData)
 
                 if buyoutPerItem and itemLink and itemID then
+                    -- Reset collector for this item the first time we see it
+                    if not resetItems[itemID] then
+                        FlipScan.ListingCollector:Reset(itemID)
+                        resetItems[itemID] = true
+                    end
                     FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
                     rowEntries[#rowEntries + 1] = {
                         rowFrame = rowFrame,
@@ -405,6 +394,9 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
             end
         end
     end
+
+    -- Nothing to process (all rows Auctionator-managed or empty)
+    if #rowEntries == 0 then return end
 
     -- Pass 2: Compute anchors and apply overlays
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
@@ -452,11 +444,6 @@ function FlipScan.Hooks:ExtractBlizzardRowData(rowFrame, rowData)
             itemLink = GetItemLinkFromID(rowData.itemID)
         end
         quantity = rowData.quantity or 1
-    -- Browse results have minPrice and itemKey
-    elseif rowData.minPrice and rowData.minPrice > 0 and rowData.itemKey then
-        buyoutPerItem = rowData.minPrice
-        itemLink = GetItemLinkFromID(rowData.itemKey.itemID)
-        quantity = rowData.totalQuantity or 1
     end
 
     if itemLink then
