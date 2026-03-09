@@ -16,7 +16,7 @@ local FlipScan = FlipScan
 -- Pending batch data for Auctionator deferred processing.
 -- Keyed by itemID, each entry holds the list of row frames to overlay.
 local pendingAuctionatorRows = {}
-local auctionatorBatchTimer = nil
+local batchGeneration = 0
 
 --- Extract an itemID from an item link via string match.
 -- @param itemLink (string) A WoW item link.
@@ -172,36 +172,46 @@ end
 -- Collects the listing into ListingCollector and schedules a deferred
 -- batch overlay pass after all rows in this cycle have populated.
 function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
-    -- Deduplicate
+    -- Deduplicate: skip if we already processed this exact frame+data combo.
     if rowFrame._flipScanLastIndex == dataIndex and rowFrame._flipScanLastData == rowData then
+        FlipScan:Debug("Populate: skipped (dedup)")
         return
     end
     rowFrame._flipScanLastIndex = dataIndex
     rowFrame._flipScanLastData = rowData
     if not rowData then
+        FlipScan:Debug("Populate: skipped (no rowData)")
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
         return
     end
 
     local buyoutPerItem = rowData.price or rowData.minPrice
     if not buyoutPerItem or buyoutPerItem <= 0 then
+        FlipScan:Debug("Populate: skipped (no price)")
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
         return
     end
 
     local itemLink = ExtractItemLink(rowFrame, rowData)
     if not itemLink then
+        FlipScan:Debug("Populate: skipped (no itemLink)")
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
         return
     end
 
     local itemID = ExtractItemID(itemLink)
     if not itemID then
+        FlipScan:Debug("Populate: skipped (no itemID from link)")
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
         return
     end
 
     local quantity = ExtractQuantity(rowData)
+
+    FlipScan:Debug(string.format(
+        "Populate: item=%d price=%s qty=%d",
+        itemID, FlipScan.Calculator.FormatGold(buyoutPerItem), quantity
+    ))
 
     -- Add listing to collector
     FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
@@ -217,14 +227,15 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
         buyoutPerItem = buyoutPerItem,
     }
 
-    -- Schedule deferred batch apply (reset timer on each row so we wait
-    -- until all rows in this populate cycle have been collected)
-    if auctionatorBatchTimer then
-        auctionatorBatchTimer:Cancel()
-    end
-    auctionatorBatchTimer = C_Timer.NewTimer(0.1, function()
-        FlipScan.Hooks:ApplyAuctionatorBatch()
-        auctionatorBatchTimer = nil
+    -- Schedule deferred batch apply using generation counter.
+    -- Each Populate increments the generation; only the timer matching
+    -- the latest generation actually fires, so earlier timers are no-ops.
+    batchGeneration = batchGeneration + 1
+    local thisGen = batchGeneration
+    C_Timer.After(0.1, function()
+        if thisGen == batchGeneration then
+            FlipScan.Hooks:ApplyAuctionatorBatch()
+        end
     end)
 end
 
@@ -232,15 +243,27 @@ end
 function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
 
+    -- Count items for debug
+    local itemCount = 0
+    for _ in pairs(pendingAuctionatorRows) do itemCount = itemCount + 1 end
+    FlipScan:Debug(string.format("Batch: processing %d item(s)", itemCount))
+
     for itemID, rows in pairs(pendingAuctionatorRows) do
+        FlipScan:Debug(string.format("Batch: item=%d rows=%d", itemID, #rows))
+
         -- Skip items with only 1 collected row — these are browse/shopping/
         -- cancelling rows (one row per item). No listing depth to analyze.
         if #rows < 2 then
+            FlipScan:Debug("Batch: skipped (single row, likely browse)")
             for _, entry in ipairs(rows) do
                 FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
             end
         else
             local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(itemID)
+            FlipScan:Debug(string.format(
+                "Batch: item=%d anchor=%s",
+                itemID, anchorPrice and FlipScan.Calculator.FormatGold(anchorPrice) or "nil"
+            ))
             if anchorPrice then
                 for _, entry in ipairs(rows) do
                     local isFlippable, netProfit, marginPct =
@@ -257,6 +280,7 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                     })
                 end
             else
+                FlipScan:Debug("Batch: no anchor price, clearing overlays")
                 for _, entry in ipairs(rows) do
                     FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
                 end
