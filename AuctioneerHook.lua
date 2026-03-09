@@ -302,6 +302,7 @@ function FlipScan.Hooks:HookBlizzardAH()
     local hookFrame = CreateFrame("Frame")
     hookFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
     hookFrame:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
+    hookFrame:RegisterEvent("COMMODITY_SEARCH_RESULTS_UPDATED")
     hookFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 
     hookFrame:SetScript("OnEvent", function(_, event)
@@ -316,7 +317,9 @@ function FlipScan.Hooks:HookBlizzardAH()
         if event == "AUCTION_HOUSE_SHOW" then
             FlipScan:Debug("AH opened.")
             FlipScan.Hooks:TryHookBlizzardScrollBoxes()
-        elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
+        elseif event == "ITEM_SEARCH_RESULTS_UPDATED"
+            or event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
+            FlipScan:Debug("Event: " .. event)
             C_Timer.After(0.05, function()
                 if FlipScan.Config:Get("enabled") then
                     FlipScan.Hooks:ScanBlizzardRows()
@@ -396,14 +399,24 @@ end
 function FlipScan.Hooks:ScanBlizzardRows()
     if not AuctionHouseFrame then return end
 
+    FlipScan:Debug("ScanBlizzardRows: starting")
+
     if AuctionHouseFrame.ItemBuyFrame and AuctionHouseFrame.ItemBuyFrame.ItemList then
+        FlipScan:Debug("ScanBlizzardRows: scanning ItemBuy")
         self:ScanBlizzardItemList(AuctionHouseFrame.ItemBuyFrame.ItemList, "ItemBuy")
     end
 
-    if AuctionHouseFrame.CommoditiesBuyFrame and AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay then
-        local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
-        if buyDisplay.ItemList then
-            self:ScanBlizzardItemList(buyDisplay.ItemList, "CommodityBuy")
+    if AuctionHouseFrame.CommoditiesBuyFrame then
+        FlipScan:Debug("ScanBlizzardRows: CommoditiesBuyFrame exists")
+        if AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay then
+            local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
+            FlipScan:Debug(string.format(
+                "ScanBlizzardRows: BuyDisplay exists, ItemList=%s",
+                tostring(buyDisplay.ItemList ~= nil)
+            ))
+            if buyDisplay.ItemList then
+                self:ScanBlizzardItemList(buyDisplay.ItemList, "CommodityBuy")
+            end
         end
     end
 
@@ -418,38 +431,61 @@ end
 -- Two-pass approach: first collect all listings into ListingCollector,
 -- then compute anchor prices and apply overlays.
 function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
-    if not itemList or not itemList.ScrollBox then return end
+    if not itemList or not itemList.ScrollBox then
+        FlipScan:Debug(debugLabel .. ": no ScrollBox, skipping")
+        return
+    end
 
     local frames = itemList.ScrollBox:GetFrames()
-    if not frames then return end
+    if not frames then
+        FlipScan:Debug(debugLabel .. ": GetFrames() returned nil")
+        return
+    end
+
+    FlipScan:Debug(string.format("%s: found %d frame(s)", debugLabel, #frames))
 
     -- Pass 1: Collect all non-Auctionator listings
     local rowEntries = {}
     local resetItems = {}
+    local skippedAtr, skippedHidden, skippedNoData, skippedExtract = 0, 0, 0, 0
     for _, rowFrame in ipairs(frames) do
-        if rowFrame:IsVisible() and rowFrame.rowData then
-            -- Skip Auctionator-managed frames
-            if not rowFrame._flipScanLastData then
-                local rowData = rowFrame.rowData
-                local buyoutPerItem, itemLink, itemID, quantity = self:ExtractBlizzardRowData(rowFrame, rowData)
+        if not rowFrame:IsVisible() then
+            skippedHidden = skippedHidden + 1
+        elseif not rowFrame.rowData then
+            skippedNoData = skippedNoData + 1
+        elseif rowFrame._flipScanLastData then
+            skippedAtr = skippedAtr + 1
+        else
+            local rowData = rowFrame.rowData
+            local buyoutPerItem, itemLink, itemID, quantity = self:ExtractBlizzardRowData(rowFrame, rowData)
 
-                if buyoutPerItem and itemLink and itemID then
-                    -- Reset collector for this item the first time we see it
-                    if not resetItems[itemID] then
-                        FlipScan.ListingCollector:Reset(itemID)
-                        resetItems[itemID] = true
-                    end
-                    FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
-                    rowEntries[#rowEntries + 1] = {
-                        rowFrame = rowFrame,
-                        itemLink = itemLink,
-                        itemID = itemID,
-                        buyoutPerItem = buyoutPerItem,
-                    }
+            if buyoutPerItem and itemLink and itemID then
+                if not resetItems[itemID] then
+                    FlipScan.ListingCollector:Reset(itemID)
+                    resetItems[itemID] = true
                 end
+                FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
+                rowEntries[#rowEntries + 1] = {
+                    rowFrame = rowFrame,
+                    itemLink = itemLink,
+                    itemID = itemID,
+                    buyoutPerItem = buyoutPerItem,
+                }
+            else
+                skippedExtract = skippedExtract + 1
+                FlipScan:Debug(string.format(
+                    "%s: extract failed — price=%s link=%s id=%s",
+                    debugLabel,
+                    tostring(buyoutPerItem), tostring(itemLink ~= nil), tostring(itemID)
+                ))
             end
         end
     end
+
+    FlipScan:Debug(string.format(
+        "%s: collected=%d skipped(atr=%d hidden=%d noData=%d extract=%d)",
+        debugLabel, #rowEntries, skippedAtr, skippedHidden, skippedNoData, skippedExtract
+    ))
 
     -- Nothing to process (all rows Auctionator-managed or empty)
     if #rowEntries == 0 then return end
