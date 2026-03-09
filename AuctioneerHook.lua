@@ -105,29 +105,53 @@ end
 -- @param rowData  (table) The data passed to Populate.
 -- @return (string|nil) The item link, or nil if it cannot be determined.
 local function ExtractItemLink(rowFrame, rowData)
+    -- 1. Direct itemLink in row data (Cancelling tab, some search results)
     if rowData.itemLink then
         return rowData.itemLink
     end
 
+    -- 2. itemKey in row data (Shopping tab)
     if rowData.itemKey then
         local link = GetItemLinkFromID(rowData.itemKey.itemID)
         if link then return link end
     end
 
+    -- 3. Direct itemID in row data (some commodity views)
+    if rowData.itemID then
+        local link = GetItemLinkFromID(rowData.itemID)
+        if link then return link end
+    end
+
+    -- 4. Row frame methods or properties
     if type(rowFrame.GetItemLink) == "function" then
         local ok, link = pcall(rowFrame.GetItemLink, rowFrame)
         if ok and link then return link end
     end
+    if rowFrame.itemKey then
+        local link = GetItemLinkFromID(rowFrame.itemKey.itemID)
+        if link then return link end
+    end
+    if rowFrame.itemID then
+        local link = GetItemLinkFromID(rowFrame.itemID)
+        if link then return link end
+    end
 
+    -- 5. Traverse parent frames for item context (Buy Item/Commodity tabs).
+    --    Check itemKey (table), itemLink (string), and itemID (number) —
+    --    commodity views often store the item as a plain itemID.
     local parent = rowFrame:GetParent()
     local depth = 0
-    while parent and depth < 8 do
+    while parent and depth < 10 do
         if parent.itemKey then
             local link = GetItemLinkFromID(parent.itemKey.itemID)
             if link then return link end
         end
         if type(parent.itemLink) == "string" then
             return parent.itemLink
+        end
+        if type(parent.itemID) == "number" then
+            local link = GetItemLinkFromID(parent.itemID)
+            if link then return link end
         end
         parent = parent:GetParent()
         depth = depth + 1
@@ -442,6 +466,23 @@ function FlipScan.Hooks:ExtractBlizzardRowData(rowFrame, rowData)
         itemLink = rowData.itemLink
         if not itemLink and rowData.itemID then
             itemLink = GetItemLinkFromID(rowData.itemID)
+        end
+        -- Commodity rows often don't carry item info — find it from the frame context
+        if not itemLink then
+            local parent = rowFrame:GetParent()
+            local depth = 0
+            while parent and depth < 10 do
+                if parent.itemKey then
+                    itemLink = GetItemLinkFromID(parent.itemKey.itemID)
+                    if itemLink then break end
+                end
+                if type(parent.itemID) == "number" then
+                    itemLink = GetItemLinkFromID(parent.itemID)
+                    if itemLink then break end
+                end
+                parent = parent:GetParent()
+                depth = depth + 1
+            end
         end
         quantity = rowData.quantity or 1
     end
