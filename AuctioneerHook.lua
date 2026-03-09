@@ -2,11 +2,11 @@
 -- Hooks into Auctionator's and/or Blizzard's AH result row rendering
 -- to feed listing data to the overlay system.
 --
--- When Auctionator is present, we hook AuctionatorResultsRowTemplateMixin:Populate
--- so every row gets an overlay applied the moment it receives data. This also
--- handles scroll recycling automatically since Populate fires on reuse.
---
--- Without Auctionator, we fall back to Blizzard AH events + C_AuctionHouse API.
+-- Two hook systems run in parallel:
+--   1. Auctionator hooks: Hook Populate on each row mixin for Auctionator's
+--      custom tabs (Shopping, Selling, Cancelling, etc.)
+--   2. Blizzard hooks: Hook ScrollBox events + scan rowData on Blizzard's
+--      native tabs (Buy, Sell, Auctions) which Auctionator does not replace.
 
 local FlipScan = FlipScan
 
@@ -197,7 +197,9 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
 end
 
 -----------------------------------------------------------------------
--- Blizzard Native AH Hooks (fallback when Auctionator is absent)
+-- Blizzard Native AH Hooks
+-- These cover the default Buy/Sell/Auctions tabs that Auctionator
+-- does not replace. Both hook systems run in parallel.
 -----------------------------------------------------------------------
 
 function FlipScan.Hooks:HookBlizzardAH()
@@ -216,65 +218,199 @@ function FlipScan.Hooks:HookBlizzardAH()
 
         if not FlipScan.Config:Get("enabled") then return end
 
-        -- If Auctionator is handling overlays via Populate hooks, skip the
-        -- Blizzard fallback scan to avoid double-processing.
-        if FlipScan.Hooks._auctionatorHooked then return end
-
         if event == "AUCTION_HOUSE_SHOW" then
             FlipScan:Debug("AH opened.")
+            FlipScan.Hooks:TryHookBlizzardScrollBoxes()
+        elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
+            -- Item search results updated — scan after a brief delay to let
+            -- the TableBuilder finish populating rowData on each frame.
+            C_Timer.After(0.05, function()
+                if FlipScan.Config:Get("enabled") then
+                    FlipScan.Hooks:ScanBlizzardRows()
+                end
+            end)
         else
-            FlipScan:Debug("Search results updated — refreshing overlays.")
-            FlipScan.Hooks:ScanBlizzardRows()
+            -- Browse results updated/added
+            C_Timer.After(0.05, function()
+                if FlipScan.Config:Get("enabled") then
+                    FlipScan.Hooks:ScanBlizzardBrowseRows()
+                end
+            end)
         end
     end)
 
     FlipScan.Hooks.hookFrame = hookFrame
 end
 
---- Fallback: scan Blizzard's native AH results when Auctionator is not present.
-function FlipScan.Hooks:ScanBlizzardRows()
-    if not FlipScan.Config:Get("enabled") then
-        FlipScan.Overlay:HideAll()
-        return
+--- Hook Blizzard's ScrollBox scroll events to refresh overlays on scroll.
+-- Called once when the AH opens. Safe to call multiple times.
+function FlipScan.Hooks:TryHookBlizzardScrollBoxes()
+    if self._blizzardScrollHooked then return end
+    if not AuctionHouseFrame then return end
+
+    local function OnScrollChanged()
+        if not FlipScan.Config:Get("enabled") then return end
+        C_Timer.After(0.05, function()
+            FlipScan.Hooks:ScanBlizzardRows()
+            FlipScan.Hooks:ScanBlizzardBrowseRows()
+        end)
     end
 
-    if not C_AuctionHouse then return end
+    -- Hook all ItemList ScrollBoxes in the Blizzard AH frame.
+    -- BrowseResultsFrame.ItemList: the category/item browse list
+    -- ItemBuyFrame.ItemList: the per-auction listing when buying items
+    -- CommoditiesBuyFrame.ItemList: commodity buy listings
+    -- AuctionsFrame.ItemList / SummaryList: the player's own auctions
+    local itemLists = {}
+    local function CollectItemList(name, frame)
+        if frame and frame.ItemList and frame.ItemList.ScrollBox then
+            itemLists[#itemLists + 1] = { name = name, scrollBox = frame.ItemList.ScrollBox }
+        end
+    end
 
-    local numResults = C_AuctionHouse.GetNumItemSearchResults() or 0
-    for i = 1, numResults do
-        local resultInfo = C_AuctionHouse.GetItemSearchResultInfo(i)
-        if resultInfo and resultInfo.buyoutAmount and resultInfo.buyoutAmount > 0 then
-            local itemLink = resultInfo.itemLink
-            local buyoutPerItem = resultInfo.buyoutAmount
-            local refPrice, source = FlipScan.Calculator.GetReferencePrice(itemLink)
+    CollectItemList("Browse", AuctionHouseFrame.BrowseResultsFrame)
+    CollectItemList("ItemBuy", AuctionHouseFrame.ItemBuyFrame)
 
-            -- Try to find the row frame in Blizzard's native ScrollBox
-            local rowFrame = nil
-            if AuctionHouseFrame and AuctionHouseFrame.BrowseResultsFrame then
-                local listFrame = AuctionHouseFrame.BrowseResultsFrame.ItemList
-                if listFrame and listFrame.ScrollBox then
-                    local frames = listFrame.ScrollBox:GetFrames()
-                    if frames and frames[i] then
-                        rowFrame = frames[i]
-                    end
-                end
-            end
+    -- CommoditiesBuyFrame uses a different list structure
+    if AuctionHouseFrame.CommoditiesBuyFrame and AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay then
+        local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
+        if buyDisplay.ItemList and buyDisplay.ItemList.ScrollBox then
+            itemLists[#itemLists + 1] = { name = "CommodityBuy", scrollBox = buyDisplay.ItemList.ScrollBox }
+        end
+    end
 
-            if rowFrame and refPrice then
-                local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
-                local isFlippable, netProfit, marginPct =
-                    FlipScan.Calculator.IsFlippable(buyoutPerItem, refPrice, minMargin)
+    -- AuctionsFrame (player's own listings)
+    if AuctionHouseFrame.AuctionsFrame then
+        CollectItemList("Auctions", AuctionHouseFrame.AuctionsFrame)
+        if AuctionHouseFrame.AuctionsFrame.SummaryList and AuctionHouseFrame.AuctionsFrame.SummaryList.ScrollBox then
+            itemLists[#itemLists + 1] = {
+                name = "AuctionsSummary",
+                scrollBox = AuctionHouseFrame.AuctionsFrame.SummaryList.ScrollBox,
+            }
+        end
+    end
 
-                FlipScan.Overlay:ApplyRowOverlay(rowFrame, {
-                    itemLink = itemLink,
-                    buyoutPerItem = buyoutPerItem,
-                    referencePrice = refPrice,
-                    source = source,
-                    netProfit = netProfit,
-                    marginPct = marginPct,
-                    isFlippable = isFlippable,
-                })
+    local hookedCount = 0
+    for _, entry in ipairs(itemLists) do
+        local ok, err = pcall(function()
+            entry.scrollBox:RegisterCallback(
+                ScrollBoxListMixin.Event.OnDataRangeChanged,
+                OnScrollChanged,
+                self
+            )
+        end)
+        if ok then
+            hookedCount = hookedCount + 1
+            FlipScan:Debug("Hooked Blizzard " .. entry.name .. " ScrollBox.")
+        else
+            FlipScan:Debug("Failed to hook " .. entry.name .. " ScrollBox: " .. tostring(err))
+        end
+    end
+
+    if hookedCount > 0 then
+        self._blizzardScrollHooked = true
+    end
+end
+
+--- Scan visible row frames in Blizzard's native item search results.
+-- Blizzard's TableBuilder populates button.rowData on each visible row frame.
+function FlipScan.Hooks:ScanBlizzardRows()
+    if not AuctionHouseFrame then return end
+
+    -- Scan item buy results (individual item listings)
+    if AuctionHouseFrame.ItemBuyFrame and AuctionHouseFrame.ItemBuyFrame.ItemList then
+        self:ScanBlizzardItemList(AuctionHouseFrame.ItemBuyFrame.ItemList, "ItemBuy")
+    end
+
+    -- Scan commodity buy results
+    if AuctionHouseFrame.CommoditiesBuyFrame and AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay then
+        local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
+        if buyDisplay.ItemList then
+            self:ScanBlizzardItemList(buyDisplay.ItemList, "CommodityBuy")
+        end
+    end
+
+    -- Scan player's own auctions
+    if AuctionHouseFrame.AuctionsFrame then
+        if AuctionHouseFrame.AuctionsFrame.ItemList then
+            self:ScanBlizzardItemList(AuctionHouseFrame.AuctionsFrame, "Auctions")
+        end
+    end
+end
+
+--- Scan visible row frames in Blizzard's browse results.
+function FlipScan.Hooks:ScanBlizzardBrowseRows()
+    if not AuctionHouseFrame then return end
+    if not AuctionHouseFrame.BrowseResultsFrame then return end
+
+    self:ScanBlizzardItemList(AuctionHouseFrame.BrowseResultsFrame.ItemList, "Browse")
+end
+
+--- Scan a single Blizzard AuctionHouseItemList for visible row frames
+--- and apply overlays based on their rowData.
+function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
+    if not itemList or not itemList.ScrollBox then return end
+
+    local frames = itemList.ScrollBox:GetFrames()
+    if not frames then return end
+
+    for _, rowFrame in ipairs(frames) do
+        if rowFrame:IsVisible() and rowFrame.rowData then
+            local rowData = rowFrame.rowData
+
+            -- Skip if this frame is managed by Auctionator (has _flipScanLastData set)
+            if rowFrame._flipScanLastData then
+                -- Already handled by Auctionator hook
+            else
+                self:ProcessBlizzardRow(rowFrame, rowData, debugLabel)
             end
         end
     end
+end
+
+--- Process a single Blizzard AH row and apply overlay.
+function FlipScan.Hooks:ProcessBlizzardRow(rowFrame, rowData, debugLabel)
+    -- Blizzard browse results have itemKey (not a direct price per item)
+    -- Item search results have buyoutAmount and itemLink
+    local buyoutPerItem = nil
+    local itemLink = nil
+
+    -- Item search results (ItemBuyFrame)
+    if rowData.buyoutAmount and rowData.buyoutAmount > 0 then
+        buyoutPerItem = rowData.buyoutAmount
+        itemLink = rowData.itemLink
+    -- Commodity results
+    elseif rowData.unitPrice and rowData.unitPrice > 0 then
+        buyoutPerItem = rowData.unitPrice
+        -- Commodity rows don't always carry an itemLink; try from parent context
+        itemLink = rowData.itemLink
+        if not itemLink and rowData.itemID then
+            itemLink = GetItemLinkFromID(rowData.itemID)
+        end
+    -- Browse results have minPrice and itemKey
+    elseif rowData.minPrice and rowData.minPrice > 0 and rowData.itemKey then
+        buyoutPerItem = rowData.minPrice
+        itemLink = GetItemLinkFromID(rowData.itemKey.itemID)
+    end
+
+    if not buyoutPerItem or not itemLink then
+        return
+    end
+
+    local refPrice, source = FlipScan.Calculator.GetReferencePrice(itemLink)
+    if not refPrice then return end
+
+    local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
+    local isFlippable, netProfit, marginPct =
+        FlipScan.Calculator.IsFlippable(buyoutPerItem, refPrice, minMargin)
+
+    FlipScan.Overlay:ApplyRowOverlay(rowFrame, {
+        itemLink = itemLink,
+        buyoutPerItem = buyoutPerItem,
+        referencePrice = refPrice,
+        source = source,
+        netProfit = netProfit,
+        marginPct = marginPct,
+        isFlippable = isFlippable,
+    })
 end
