@@ -72,6 +72,71 @@ function FlipScan.Hooks:HookAuctionator()
     end
 end
 
+--- Try to get an item link from an item ID, using available APIs.
+-- @param itemID (number) The item ID.
+-- @return (string|nil) The item link, or nil if unavailable.
+local function GetItemLinkFromID(itemID)
+    if not itemID then return nil end
+    -- Try the global GetItemInfo first (most reliable across WoW versions)
+    if GetItemInfo then
+        local _, link = GetItemInfo(itemID)
+        if link then return link end
+    end
+    -- Fallback to C_Item API
+    if C_Item and C_Item.GetItemInfo then
+        local _, link = C_Item.GetItemInfo(itemID)
+        if link then return link end
+    end
+    return nil
+end
+
+--- Extract an item link from row data and/or the row frame context.
+-- Different Auctionator tabs provide item identification differently:
+--   Cancelling tab:      rowData.itemLink (direct)
+--   Shopping tab:        rowData.itemKey.itemID -> GetItemInfo
+--   Buy Item/Commodity:  No item in rowData; must find from parent frame context
+-- @param rowFrame (Frame) The AH result row frame.
+-- @param rowData  (table) The data passed to Populate.
+-- @return (string|nil) The item link, or nil if it cannot be determined.
+local function ExtractItemLink(rowFrame, rowData)
+    -- 1. Direct itemLink in row data (Cancelling tab, some search results)
+    if rowData.itemLink then
+        return rowData.itemLink
+    end
+
+    -- 2. Build from itemKey in row data (Shopping tab)
+    if rowData.itemKey then
+        local link = GetItemLinkFromID(rowData.itemKey.itemID)
+        if link then return link end
+    end
+
+    -- 3. Check row frame for a GetItemLink method (some Auctionator mixins expose this)
+    if type(rowFrame.GetItemLink) == "function" then
+        local ok, link = pcall(rowFrame.GetItemLink, rowFrame)
+        if ok and link then return link end
+    end
+
+    -- 4. Traverse parent frames for item context (Buy Item/Commodity tabs).
+    --    In these views, the item is known at the list/panel level, not per-row.
+    local parent = rowFrame:GetParent()
+    local depth = 0
+    while parent and depth < 8 do
+        -- Check for itemKey on the parent frame
+        if parent.itemKey then
+            local link = GetItemLinkFromID(parent.itemKey.itemID)
+            if link then return link end
+        end
+        -- Check for a direct itemLink property
+        if type(parent.itemLink) == "string" then
+            return parent.itemLink
+        end
+        parent = parent:GetParent()
+        depth = depth + 1
+    end
+
+    return nil
+end
+
 --- Called each time Auctionator populates a result row with data.
 -- Extracts the buyout price from the row data and applies an overlay.
 -- Uses a generation counter to skip duplicate calls (derived mixins that
@@ -100,22 +165,8 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
         return
     end
 
-    -- Build an item link from the item key if available
-    local itemLink = nil
-    if rowData.itemLink then
-        itemLink = rowData.itemLink
-    elseif rowData.itemKey then
-        -- Auctionator stores itemKey as { itemID, itemLevel, itemSuffix, battlePetSpeciesID }
-        local itemID = rowData.itemKey.itemID
-        if itemID then
-            -- Get the item link from the item ID
-            local _, link = C_Item.GetItemInfo(itemID)
-            if not link and GetItemInfo then
-                _, link = GetItemInfo(itemID)
-            end
-            itemLink = link
-        end
-    end
+    -- Get the item link via multiple fallback methods
+    local itemLink = ExtractItemLink(rowFrame, rowData)
 
     if not itemLink then
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
