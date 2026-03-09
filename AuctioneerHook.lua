@@ -27,32 +27,63 @@ end
 -----------------------------------------------------------------------
 
 function FlipScan.Hooks:HookAuctionator()
-    -- Hook the Populate method on Auctionator's base row mixin.
-    -- Every result row (shopping, buy item, buy commodity, etc.) inherits
-    -- from AuctionatorResultsRowTemplateMixin and calls Populate(rowData, dataIndex)
-    -- when the ScrollBox assigns data to the frame.
-    local ok, err = pcall(function()
-        hooksecurefunc(AuctionatorResultsRowTemplateMixin, "Populate", function(rowFrame, rowData, dataIndex)
-            if not FlipScan.Config:Get("enabled") then
-                FlipScan.Overlay:ClearRowOverlay(rowFrame)
-                return
+    -- Auctionator's row mixins are created via CreateFromMixins(), which copies
+    -- function references at definition time. Hooking the base mixin only
+    -- catches derived mixins that explicitly call the base Populate — those
+    -- that inherit without overriding get a stale copy. We must hook each
+    -- derived mixin's Populate individually to cover all tabs.
+    local populateHook = function(rowFrame, rowData, dataIndex)
+        if not FlipScan.Config:Get("enabled") then
+            FlipScan.Overlay:ClearRowOverlay(rowFrame)
+            return
+        end
+        FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
+    end
+
+    -- All known Auctionator row mixins that display prices.
+    -- Each inherits from AuctionatorResultsRowTemplateMixin.
+    local rowMixins = {
+        { name = "Base",           mixin = AuctionatorResultsRowTemplateMixin },
+        { name = "Shopping",       mixin = AuctionatorShoppingResultsRowMixin },
+        { name = "BuyItem",        mixin = AuctionatorBuyItemRowMixin },
+        { name = "BuyCommodity",   mixin = AuctionatorBuyCommodityRowMixin },
+        { name = "SellSearch",     mixin = AuctionatorSellSearchRowMixin },
+        { name = "Cancelling",     mixin = AuctionatorCancellingListResultsRowMixin },
+    }
+
+    local hookedCount = 0
+    for _, entry in ipairs(rowMixins) do
+        if entry.mixin and entry.mixin.Populate then
+            local ok, err = pcall(function()
+                hooksecurefunc(entry.mixin, "Populate", populateHook)
+            end)
+            if ok then
+                hookedCount = hookedCount + 1
+                FlipScan:Debug("Hooked Auctionator " .. entry.name .. " row Populate.")
+            else
+                FlipScan:Debug("Failed to hook " .. entry.name .. ": " .. tostring(err))
             end
+        end
+    end
 
-            FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
-        end)
-    end)
-
-    if ok then
+    if hookedCount > 0 then
         self._auctionatorHooked = true
-        FlipScan:Debug("Hooked AuctionatorResultsRowTemplateMixin:Populate.")
-    else
-        FlipScan:Debug("Failed to hook Auctionator rows: " .. tostring(err))
+        FlipScan:Debug("Hooked " .. hookedCount .. " Auctionator row mixin(s).")
     end
 end
 
 --- Called each time Auctionator populates a result row with data.
 -- Extracts the buyout price from the row data and applies an overlay.
+-- Uses a generation counter to skip duplicate calls (derived mixins that
+-- override Populate and call the base will trigger hooks on both tables).
 function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
+    -- Deduplicate: if we already processed this exact frame+dataIndex combo
+    -- in this Populate cycle, skip it. The dataIndex changes on each recycle.
+    if rowFrame._flipScanLastIndex == dataIndex and rowFrame._flipScanLastData == rowData then
+        return
+    end
+    rowFrame._flipScanLastIndex = dataIndex
+    rowFrame._flipScanLastData = rowData
     if not rowData then
         FlipScan.Overlay:ClearRowOverlay(rowFrame)
         return
