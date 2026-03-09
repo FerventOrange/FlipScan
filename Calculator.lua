@@ -66,11 +66,9 @@ function FlipScan.Calculator.FindAnchorPrice(tiers, totalQty)
         return nil
     end
 
-    -- Not enough price tiers to distinguish cheap from market — return nil
-    -- so no overlay is shown. Single-item browse rows and thin markets
-    -- don't have enough data to recommend a flip.
-    if #tiers < 3 then
-        return nil
+    -- Single tier — no spread to exploit, anchor is the only price
+    if #tiers == 1 then
+        return tiers[1].price
     end
 
     local gapThreshold = (FlipScan.Config:Get("gapThresholdPercent") or 20) / 100
