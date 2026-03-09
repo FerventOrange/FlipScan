@@ -49,44 +49,63 @@ function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMargi
     return isFlippable, netProfit, netMarginPercent
 end
 
---- Get a reference (market) price for an item, checking sources in priority order.
+--- Find the resell anchor price from a sorted list of price tiers.
 --
--- Priority:
---   1. Auctionator's auction price (market data from recent scans)
---   2. Vendor sell price as an absolute floor fallback
+-- Uses a two-pass approach:
+--   1. Gap detection: walk tiers low→high, find the first price jump ≥ gapThreshold%
+--      where ≥ gapMinSupplyAbove% of total supply exists at or above the gap.
+--      The tier after the gap is the anchor — that's where the market "really" sits.
+--   2. Percentile fallback: if no gap qualifies, find the tier where cumulative
+--      quantity reaches anchorPercentile% of total supply.
 --
--- @param itemLink (string) A WoW item link.
--- @return price   (number|nil) Reference price in copper, or nil if unknown.
--- @return source  (string)     Label for which source provided the price.
-function FlipScan.Calculator.GetReferencePrice(itemLink)
-    if not itemLink then
-        return nil, "none"
+-- @param tiers    (table) Array of { price = number, qty = number }, sorted by price ascending.
+-- @param totalQty (number) Sum of all tier quantities.
+-- @return anchorPrice (number|nil) The resell anchor price in copper, or nil if no tiers.
+function FlipScan.Calculator.FindAnchorPrice(tiers, totalQty)
+    if not tiers or #tiers == 0 or not totalQty or totalQty <= 0 then
+        return nil
     end
 
-    -- Source 1: Auctionator auction price
-    if Auctionator and Auctionator.API and Auctionator.API.v1
-            and Auctionator.API.v1.GetAuctionPriceByItemLink then
-        local ok, atrPrice = pcall(
-            Auctionator.API.v1.GetAuctionPriceByItemLink, "FlipScan", itemLink
-        )
-        if ok and atrPrice and atrPrice > 0 then
-            return atrPrice, "Auctionator"
+    -- Not enough price tiers to distinguish cheap from market — return the
+    -- highest tier so everything evaluates as red (no flip recommendation).
+    if #tiers < 3 then
+        return tiers[#tiers].price
+    end
+
+    local gapThreshold = (FlipScan.Config:Get("gapThresholdPercent") or 20) / 100
+    local gapMinSupplyAbove = (FlipScan.Config:Get("gapMinSupplyAbovePercent") or 20) / 100
+    local anchorPercentile = (FlipScan.Config:Get("anchorPercentile") or 70) / 100
+
+    -- Pass 1: Gap detection
+    -- Walk tiers and find the first significant price jump with enough supply above it.
+    -- Also require at least 2 distinct tiers above the gap — a single massive wall
+    -- at one price is likely player manipulation, not real market depth.
+    local cumulativeQty = 0
+    for i = 1, #tiers - 1 do
+        cumulativeQty = cumulativeQty + tiers[i].qty
+        local jump = (tiers[i + 1].price - tiers[i].price) / tiers[i].price
+        if jump >= gapThreshold then
+            local supplyAbove = totalQty - cumulativeQty
+            local tiersAbove = #tiers - i
+            if supplyAbove / totalQty >= gapMinSupplyAbove and tiersAbove >= 2 then
+                return tiers[i + 1].price
+            end
         end
     end
 
-    -- Source 2: Vendor sell price (absolute floor — items are always worth at least this)
-    local vendorPrice
-    if C_Item and C_Item.GetItemInfo then
-        _, _, _, _, _, _, _, _, _, _, vendorPrice = C_Item.GetItemInfo(itemLink)
-    end
-    if not vendorPrice and GetItemInfo then
-        _, _, _, _, _, _, _, _, _, _, vendorPrice = GetItemInfo(itemLink)
-    end
-    if vendorPrice and vendorPrice > 0 then
-        return vendorPrice, "Vendor"
+    -- Pass 2: Percentile fallback
+    -- Find the tier where cumulative quantity reaches the anchor percentile.
+    local threshold = totalQty * anchorPercentile
+    cumulativeQty = 0
+    for i = 1, #tiers do
+        cumulativeQty = cumulativeQty + tiers[i].qty
+        if cumulativeQty >= threshold then
+            return tiers[i].price
+        end
     end
 
-    return nil, "none"
+    -- Shouldn't reach here, but return the last tier as ultimate fallback
+    return tiers[#tiers].price
 end
 
 --- Format a copper amount into a human-readable gold/silver/copper string.

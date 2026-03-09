@@ -9,6 +9,7 @@
 FlipScan.lua
 Config.lua
 Calculator.lua
+ListingCollector.lua
 AuctioneerHook.lua
 Overlay.lua
 Tooltip.lua

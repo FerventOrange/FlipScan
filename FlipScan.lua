@@ -14,6 +14,7 @@ FlipScan.Hooks = {}
 FlipScan.Commands = {}
 FlipScan.Tooltip = {}
 FlipScan.SettingsPanel = {}
+FlipScan.ListingCollector = {}
 
 -- Debug state (toggled at runtime, not persisted)
 FlipScan.debugMode = false

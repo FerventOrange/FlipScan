@@ -40,7 +40,7 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
     local flipData = self:GetFlipDataFromOwner(tooltip)
     if not flipData then return end
 
-    -- Net proceeds after the 5% AH cut when reselling at market value
+    -- Net proceeds after the 5% AH cut when reselling at anchor price
     local netAfterCut = flipData.referencePrice * FlipScan.Calculator.SELLER_KEEPS
 
     -- Inject lines into the tooltip
@@ -48,7 +48,7 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
     tooltip:AddLine(ADDON_COLOR .. "FlipScan:" .. RESET_COLOR)
 
     tooltip:AddDoubleLine(
-        LABEL_COLOR .. "  Market Value:" .. RESET_COLOR,
+        LABEL_COLOR .. "  Resell Anchor:" .. RESET_COLOR,
         FlipScan.Calculator.FormatGold(flipData.referencePrice) .. " (" .. flipData.source .. ")"
     )
     tooltip:AddDoubleLine(

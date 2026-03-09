@@ -11,6 +11,10 @@ local defaults = {
     noFlipColor    = { r = 1, g = 0, b = 0, a = 0.4 },    -- Red tint for money-losing flips
     showTooltipDetail = true,       -- Inject net profit breakdown into item tooltips
     enabled = true,                 -- Master on/off toggle
+    maxPriceTiers = 15,             -- Cap price tiers to exclude outlier joke listings
+    gapThresholdPercent = 20,       -- Min % price jump to count as a gap between tiers
+    gapMinSupplyAbovePercent = 20,  -- Min % of total supply above gap to qualify as anchor
+    anchorPercentile = 70,          -- Percentile of cumulative supply for fallback anchor
 }
 
 --- Deep-copy a table (one level deep; sufficient for our flat+color-table schema).
