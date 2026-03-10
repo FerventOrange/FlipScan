@@ -65,15 +65,20 @@ function FlipScan.Overlay:ApplyRowOverlay(rowFrame, flipData)
 
     -- Update margin text or SELL label
     if overlay.marginText then
-        if flipData.isFirstRed then
+        if flipData.noSellPoint then
+            -- No sell point found — red overlay only, no margin text
+            overlay.marginText:SetText("")
+            overlay.marginText:Hide()
+        elseif flipData.isFirstRed then
             overlay.marginText:SetText("\226\151\132 SELL")
             overlay.marginText:SetTextColor(1, 1, 1, 1)
+            overlay.marginText:Show()
         else
             local sign = flipData.marginPct >= 0 and "+" or ""
             overlay.marginText:SetText(string.format("%s%.1f%%", sign, flipData.marginPct))
             overlay.marginText:SetTextColor(1, 1, 1, 0.9)
+            overlay.marginText:Show()
         end
-        overlay.marginText:Show()
     end
 
     -- Store the flip data on the row frame for tooltip access
