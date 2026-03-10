@@ -243,10 +243,24 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
     local wallFraction = (FlipScan.Config:Get("wallFractionPercent") or 40) / 100
 
-    -- Count items for debug
+    -- Count distinct items in this batch
     local itemCount = 0
     for _ in pairs(pendingAuctionatorRows) do itemCount = itemCount + 1 end
     FlipScan:Debug(string.format("Batch: processing %d item(s)", itemCount))
+
+    -- Multiple different items in one batch = browse/shopping view, not
+    -- commodity detail. Clear overlays and bail out.
+    if itemCount > 1 then
+        FlipScan:Debug("Batch: skipped (multi-item browse)")
+        for _, rows in pairs(pendingAuctionatorRows) do
+            for _, entry in ipairs(rows) do
+                FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
+            end
+        end
+        pendingAuctionatorRows = {}
+        self:UpdateSellAtDisplay(nil)
+        return
+    end
 
     for itemID, rows in pairs(pendingAuctionatorRows) do
         FlipScan:Debug(string.format("Batch: item=%d rows=%d", itemID, #rows))
@@ -299,6 +313,7 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                     netProfit = netProfit,
                     marginPct = marginPct,
                     isFlippable = isFlippable,
+                    noSellPoint = (sellPoint == nil),
                 }
                 -- Mark the sell point row with the SELL label
                 if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
@@ -461,9 +476,10 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
         return
     end
 
-    local frames = itemList.ScrollBox:GetFrames()
-    if not frames then
-        FlipScan:Debug(debugLabel .. ": GetFrames() returned nil")
+    -- pcall: GetFrames() crashes if ScrollBox.view is nil (not yet initialized)
+    local ok, frames = pcall(itemList.ScrollBox.GetFrames, itemList.ScrollBox)
+    if not ok or not frames then
+        FlipScan:Debug(debugLabel .. ": GetFrames() unavailable")
         return
     end
 
@@ -581,6 +597,7 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
                     netProfit = netProfit,
                     marginPct = marginPct,
                     isFlippable = isFlippable,
+                    noSellPoint = (sellPoint == nil),
                 }
                 if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
                     flipResults[idx].isFirstRed = true
