@@ -66,7 +66,7 @@ function FlipScan.Overlay:ApplyRowOverlay(rowFrame, flipData)
     -- Update margin text or SELL label
     if overlay.marginText then
         if flipData.isFirstRed then
-            overlay.marginText:SetText("\xe2\x97\x84 SELL")
+            overlay.marginText:SetText("\226\151\132 SELL")
             overlay.marginText:SetTextColor(1, 1, 1, 1)
         else
             local sign = flipData.marginPct >= 0 and "+" or ""

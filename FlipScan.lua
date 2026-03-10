@@ -4,7 +4,7 @@
 
 -- Global addon namespace
 FlipScan = FlipScan or {}
-FlipScan.version = "0.5.0"
+FlipScan.version = "0.6.0"
 
 -- Sub-namespaces for each module
 FlipScan.Config = {}

@@ -1,15 +1,15 @@
 -- FlipScan: AH Hook Layer
 -- Hooks into Auctionator's and/or Blizzard's AH result row rendering
--- to feed listing data to the ListingCollector for batch anchor pricing.
+-- to detect flip opportunities using gap-based sell point detection.
 --
 -- Two hook systems run in parallel:
 --   1. Auctionator hooks: Hook Populate on each row mixin for Auctionator's
 --      custom tabs (Shopping, Selling, Cancelling, etc.)
---      Each Populate adds a listing to ListingCollector; a deferred timer
---      fires after all rows populate to compute anchor and apply overlays.
+--      Each Populate collects row data; a deferred timer fires after all
+--      rows populate to find the sell point and apply overlays.
 --   2. Blizzard hooks: Hook ScrollBox events + scan rowData on Blizzard's
 --      native tabs (Buy, Sell, Auctions) which Auctionator does not replace.
---      Collects all visible listings first, then computes anchor and applies.
+--      Collects all visible listings first, then finds sell point and applies.
 
 local FlipScan = FlipScan
 
@@ -169,8 +169,8 @@ local function ExtractQuantity(rowData)
 end
 
 --- Called each time Auctionator populates a result row with data.
--- Collects the listing into ListingCollector and schedules a deferred
--- batch overlay pass after all rows in this cycle have populated.
+-- Collects the row data and schedules a deferred batch overlay pass
+-- after all rows in this cycle have populated.
 function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
     -- Deduplicate: skip if we already processed this exact frame+data combo.
     if rowFrame._flipScanLastIndex == dataIndex and rowFrame._flipScanLastData == rowData then
@@ -213,9 +213,6 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
         itemID, FlipScan.Calculator.FormatGold(buyoutPerItem), quantity
     ))
 
-    -- Add listing to collector
-    FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
-
     -- Store pending row for deferred batch overlay
     if not pendingAuctionatorRows[itemID] then
         pendingAuctionatorRows[itemID] = {}
@@ -225,6 +222,7 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
         rowFrame = rowFrame,
         itemLink = itemLink,
         buyoutPerItem = buyoutPerItem,
+        quantity = quantity,
     }
 
     -- Schedule deferred batch apply using generation counter.
@@ -239,10 +237,11 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
     end)
 end
 
---- Apply overlays to all pending Auctionator rows using the computed market value.
+--- Apply overlays to all pending Auctionator rows using gap-based sell point detection.
 function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
+    local wallFraction = (FlipScan.Config:Get("wallFractionPercent") or 40) / 100
 
     -- Count items for debug
     local itemCount = 0
@@ -260,57 +259,65 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                 FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
             end
         else
-            local marketValue = FlipScan.ListingCollector:GetMarketValue(itemID)
-            FlipScan:Debug(string.format(
-                "Batch: item=%d marketValue=%s",
-                itemID, marketValue and FlipScan.Calculator.FormatGold(marketValue) or "nil"
-            ))
-            if marketValue then
-                -- First pass: compute flip data for all rows
-                local flipResults = {}
-                local firstRedIdx = nil
-                for i, entry in ipairs(rows) do
-                    local isFlippable, netProfit, marginPct =
-                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, marketValue, minMargin, minProfit)
-                    flipResults[i] = {
-                        itemLink = entry.itemLink,
-                        buyoutPerItem = entry.buyoutPerItem,
-                        referencePrice = marketValue,
-                        source = "IQM",
-                        netProfit = netProfit,
-                        marginPct = marginPct,
-                        isFlippable = isFlippable,
-                    }
-                    if not isFlippable and not firstRedIdx then
-                        firstRedIdx = i
-                    end
-                end
-
-                -- Mark the first red row
-                if firstRedIdx then
-                    flipResults[firstRedIdx].isFirstRed = true
-                end
-
-                -- Second pass: apply overlays
-                for i, entry in ipairs(rows) do
-                    FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
-                end
-
-                self:UpdateSellAtDisplay(marketValue)
-            else
-                FlipScan:Debug("Batch: no market value, clearing overlays")
-                for _, entry in ipairs(rows) do
-                    FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
-                end
-                self:UpdateSellAtDisplay(nil)
+            -- Build price tiers from row data
+            local priceBuckets = {}
+            for _, entry in ipairs(rows) do
+                priceBuckets[entry.buyoutPerItem] = (priceBuckets[entry.buyoutPerItem] or 0) + entry.quantity
             end
+            local tiers = {}
+            for price, qty in pairs(priceBuckets) do
+                tiers[#tiers + 1] = { price = price, qty = qty }
+            end
+            table.sort(tiers, function(a, b) return a.price < b.price end)
+
+            -- Cap at maxPriceTiers
+            local maxTiers = FlipScan.Config:Get("maxPriceTiers") or 50
+            if #tiers > maxTiers then
+                for i = #tiers, maxTiers + 1, -1 do
+                    tiers[i] = nil
+                end
+            end
+
+            local sellPoint = FlipScan.Calculator.FindSellPoint(tiers, minMargin, minProfit, wallFraction)
+            FlipScan:Debug(string.format(
+                "Batch: item=%d tiers=%d sellPoint=%s",
+                itemID, #tiers, sellPoint and FlipScan.Calculator.FormatGold(sellPoint) or "nil"
+            ))
+
+            -- Compute flip data for all rows
+            local flipResults = {}
+            local sellPointMarked = false
+            for i, entry in ipairs(rows) do
+                local refPrice = sellPoint or entry.buyoutPerItem
+                local isFlippable, netProfit, marginPct =
+                    FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, refPrice, minMargin, minProfit)
+                flipResults[i] = {
+                    itemLink = entry.itemLink,
+                    buyoutPerItem = entry.buyoutPerItem,
+                    referencePrice = refPrice,
+                    source = "Gap",
+                    netProfit = netProfit,
+                    marginPct = marginPct,
+                    isFlippable = isFlippable,
+                }
+                -- Mark the sell point row with the SELL label
+                if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
+                    flipResults[i].isFirstRed = true
+                    sellPointMarked = true
+                end
+            end
+
+            -- Apply overlays
+            for i, entry in ipairs(rows) do
+                FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
+            end
+
+            self:UpdateSellAtDisplay(sellPoint)
         end
     end
 
-    -- Clear pending data for next cycle; also reset collector so next
-    -- populate cycle starts fresh with whatever rows are visible.
+    -- Clear pending data for next cycle
     pendingAuctionatorRows = {}
-    FlipScan.ListingCollector:Reset()
 end
 
 -----------------------------------------------------------------------
@@ -327,7 +334,6 @@ function FlipScan.Hooks:HookBlizzardAH()
     hookFrame:SetScript("OnEvent", function(_, event)
         if event == "AUCTION_HOUSE_CLOSED" then
             FlipScan.Overlay:HideAll()
-            FlipScan.ListingCollector:Reset()
             FlipScan.Hooks:UpdateSellAtDisplay(nil)
             return
         end
@@ -448,8 +454,7 @@ function FlipScan.Hooks:ScanBlizzardRows()
 end
 
 --- Scan a single Blizzard AuctionHouseItemList for visible row frames.
--- Two-pass approach: first collect all listings into ListingCollector,
--- then compute anchor prices and apply overlays.
+-- Three-pass approach: collect rows, find sell point via gap+wall, apply overlays.
 function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     if not itemList or not itemList.ScrollBox then
         FlipScan:Debug(debugLabel .. ": no ScrollBox, skipping")
@@ -466,7 +471,6 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
 
     -- Pass 1: Collect all non-Auctionator listings
     local rowEntries = {}
-    local resetItems = {}
     local skippedAtr, skippedHidden, skippedNoData, skippedExtract = 0, 0, 0, 0
     for _, rowFrame in ipairs(frames) do
         if not rowFrame:IsVisible() then
@@ -480,16 +484,12 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
             local buyoutPerItem, itemLink, itemID, quantity = self:ExtractBlizzardRowData(rowFrame, rowData)
 
             if buyoutPerItem and itemLink and itemID then
-                if not resetItems[itemID] then
-                    FlipScan.ListingCollector:Reset(itemID)
-                    resetItems[itemID] = true
-                end
-                FlipScan.ListingCollector:AddListing(itemID, buyoutPerItem, quantity)
                 rowEntries[#rowEntries + 1] = {
                     rowFrame = rowFrame,
                     itemLink = itemLink,
                     itemID = itemID,
                     buyoutPerItem = buyoutPerItem,
+                    quantity = quantity,
                 }
             else
                 skippedExtract = skippedExtract + 1
@@ -510,38 +510,84 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     -- Nothing to process (all rows Auctionator-managed or empty)
     if #rowEntries == 0 then return end
 
-    -- Pass 2: Compute market values and build flip data
+    -- Pass 2: Group by itemID, build tiers, find sell point
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
-    local flipResults = {}
-    local firstRedIdx = nil
-    local lastMarketValue = nil
+    local wallFraction = (FlipScan.Config:Get("wallFractionPercent") or 40) / 100
+    local maxTiers = FlipScan.Config:Get("maxPriceTiers") or 50
 
-    for i, entry in ipairs(rowEntries) do
-        local marketValue = FlipScan.ListingCollector:GetMarketValue(entry.itemID)
-        if marketValue then
-            lastMarketValue = marketValue
-            local isFlippable, netProfit, marginPct =
-                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, marketValue, minMargin, minProfit)
-
-            flipResults[i] = {
-                itemLink = entry.itemLink,
-                buyoutPerItem = entry.buyoutPerItem,
-                referencePrice = marketValue,
-                source = "IQM",
-                netProfit = netProfit,
-                marginPct = marginPct,
-                isFlippable = isFlippable,
-            }
-            if not isFlippable and not firstRedIdx then
-                firstRedIdx = i
-            end
+    -- Group entries by itemID
+    local groups = {}
+    for _, entry in ipairs(rowEntries) do
+        if not groups[entry.itemID] then
+            groups[entry.itemID] = {}
         end
+        local g = groups[entry.itemID]
+        g[#g + 1] = entry
     end
 
-    -- Mark the first red row
-    if firstRedIdx and flipResults[firstRedIdx] then
-        flipResults[firstRedIdx].isFirstRed = true
+    local flipResults = {}  -- keyed by rowEntries index
+    local lastSellPoint = nil
+
+    for itemID, group in pairs(groups) do
+        -- Build price tiers
+        local priceBuckets = {}
+        for _, entry in ipairs(group) do
+            priceBuckets[entry.buyoutPerItem] = (priceBuckets[entry.buyoutPerItem] or 0) + entry.quantity
+        end
+        local tiers = {}
+        for price, qty in pairs(priceBuckets) do
+            tiers[#tiers + 1] = { price = price, qty = qty }
+        end
+        table.sort(tiers, function(a, b) return a.price < b.price end)
+
+        if #tiers > maxTiers then
+            for i = #tiers, maxTiers + 1, -1 do
+                tiers[i] = nil
+            end
+        end
+
+        local sellPoint = nil
+        if #group >= 2 then
+            sellPoint = FlipScan.Calculator.FindSellPoint(tiers, minMargin, minProfit, wallFraction)
+        end
+        if sellPoint then lastSellPoint = sellPoint end
+
+        FlipScan:Debug(string.format(
+            "%s: item=%d tiers=%d sellPoint=%s",
+            debugLabel, itemID, #tiers,
+            sellPoint and FlipScan.Calculator.FormatGold(sellPoint) or "nil"
+        ))
+
+        -- Compute flip data for each row in this group
+        local sellPointMarked = false
+        for _, entry in ipairs(group) do
+            local refPrice = sellPoint or entry.buyoutPerItem
+            local isFlippable, netProfit, marginPct =
+                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, refPrice, minMargin, minProfit)
+
+            -- Find this entry's index in the original rowEntries
+            local idx
+            for j, re in ipairs(rowEntries) do
+                if re == entry then idx = j; break end
+            end
+
+            if idx then
+                flipResults[idx] = {
+                    itemLink = entry.itemLink,
+                    buyoutPerItem = entry.buyoutPerItem,
+                    referencePrice = refPrice,
+                    source = "Gap",
+                    netProfit = netProfit,
+                    marginPct = marginPct,
+                    isFlippable = isFlippable,
+                }
+                if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
+                    flipResults[idx].isFirstRed = true
+                    sellPointMarked = true
+                end
+            end
+        end
     end
 
     -- Pass 3: Apply overlays
@@ -553,7 +599,7 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
         end
     end
 
-    self:UpdateSellAtDisplay(lastMarketValue)
+    self:UpdateSellAtDisplay(lastSellPoint)
 end
 
 -----------------------------------------------------------------------

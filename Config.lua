@@ -13,7 +13,7 @@ local defaults = {
     showTooltipDetail = true,       -- Inject net profit breakdown into item tooltips
     enabled = true,                 -- Master on/off toggle
     maxPriceTiers = 50,             -- Cap price tiers to exclude outlier joke listings
-    iqmTrimPercent = 25,            -- % of supply to trim from each end for IQM calculation
+    wallFractionPercent = 40,       -- A tier holding >X% of total supply in range is a wall
 }
 
 --- Deep-copy a table (one level deep; sufficient for our flat+color-table schema).

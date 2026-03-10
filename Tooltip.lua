@@ -48,7 +48,7 @@ function FlipScan.Tooltip:OnTooltipItem(tooltip)
     tooltip:AddLine(ADDON_COLOR .. "FlipScan:" .. RESET_COLOR)
 
     tooltip:AddDoubleLine(
-        LABEL_COLOR .. "  Market Value:" .. RESET_COLOR,
+        LABEL_COLOR .. "  Sell Target:" .. RESET_COLOR,
         FlipScan.Calculator.FormatGold(flipData.referencePrice) .. " (" .. flipData.source .. ")"
     )
     tooltip:AddDoubleLine(

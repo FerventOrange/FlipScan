@@ -53,78 +53,53 @@ function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMargi
     return isFlippable, netProfit, netMarginPercent
 end
 
---- Compute the market value using an Interquartile Mean, then snap to a real tier.
+--- Find the sell point price using gap detection with wall filtering.
 --
--- The IQM trims the bottom and top portions of the supply distribution by quantity,
--- then computes a weighted mean of the remaining middle portion. This is naturally
--- resistant to quantity walls and cheap/expensive outliers.
+-- Walks tiers cheapest-to-expensive looking for the first significant price gap
+-- (where IsFlippable passes between consecutive tiers). The tier above the gap
+-- is the sell point candidate. If a quantity wall blocks the candidate, try the
+-- next gap. Returns nil if no valid sell point exists.
 --
--- After computing the IQM, the result is "snapped" to the first real tier price
--- that is >= the IQM. This ensures the market value is a concrete, listable price.
---
--- @param tiers    (table)  Array of { price = number, qty = number }, sorted by price ascending.
--- @param totalQty (number) Sum of all tier quantities.
--- @return marketValue (number|nil) The market value in copper, or nil if no tiers.
-function FlipScan.Calculator.FindMarketValue(tiers, totalQty)
-    if not tiers or #tiers == 0 or not totalQty or totalQty <= 0 then
+-- @param tiers         (table)  Array of { price, qty } sorted by price ascending.
+-- @param minMargin     (number) Min margin % passed to IsFlippable.
+-- @param minProfit     (number) Min absolute profit in copper passed to IsFlippable.
+-- @param wallFraction  (number) Max fraction (0-1) any single tier can hold (e.g. 0.4).
+-- @return sellPoint    (number|nil) The sell point price in copper, or nil.
+function FlipScan.Calculator.FindSellPoint(tiers, minMargin, minProfit, wallFraction)
+    if not tiers or #tiers < 2 then
         return nil
     end
 
-    -- Single tier — market value is the only price
-    if #tiers == 1 then
-        return tiers[1].price
-    end
+    for i = 1, #tiers - 1 do
+        local isGap = FlipScan.Calculator.IsFlippable(
+            tiers[i].price, tiers[i + 1].price, minMargin, minProfit
+        )
 
-    -- Determine how much supply to trim from each end
-    local trimFraction = math.min((FlipScan.Config:Get("iqmTrimPercent") or 25) / 100, 0.49)
-    local trimQty = totalQty * trimFraction
+        if isGap then
+            -- Compute total quantity from tiers[1] through tiers[i+1]
+            local totalQty = 0
+            for j = 1, i + 1 do
+                totalQty = totalQty + tiers[j].qty
+            end
 
-    -- Bottom trim: walk cheapest→expensive, exclude up to trimQty units
-    local bottomExclude = {}
-    local bottomRemaining = trimQty
-    for i = 1, #tiers do
-        local exclude = math.min(tiers[i].qty, bottomRemaining)
-        bottomExclude[i] = exclude
-        bottomRemaining = bottomRemaining - exclude
-        if bottomRemaining <= 0 then break end
-    end
+            -- Wall check: reject if any single tier dominates the supply
+            local isWall = false
+            if wallFraction and wallFraction > 0 and totalQty > 0 then
+                for j = 1, i + 1 do
+                    if tiers[j].qty > wallFraction * totalQty then
+                        isWall = true
+                        break
+                    end
+                end
+            end
 
-    -- Top trim: walk expensive→cheapest, exclude up to trimQty units
-    local topExclude = {}
-    local topRemaining = trimQty
-    for i = #tiers, 1, -1 do
-        local exclude = math.min(tiers[i].qty, topRemaining)
-        topExclude[i] = exclude
-        topRemaining = topRemaining - exclude
-        if topRemaining <= 0 then break end
-    end
-
-    -- Compute weighted mean of the included middle portion
-    local weightedSum = 0
-    local includedQty = 0
-    for i = 1, #tiers do
-        local included = tiers[i].qty - (bottomExclude[i] or 0) - (topExclude[i] or 0)
-        if included > 0 then
-            weightedSum = weightedSum + tiers[i].price * included
-            includedQty = includedQty + included
+            if not isWall then
+                return tiers[i + 1].price
+            end
         end
     end
 
-    if includedQty <= 0 then
-        return tiers[1].price
-    end
-
-    local iqm = weightedSum / includedQty
-
-    -- Snap to the first real tier price >= IQM
-    for i = 1, #tiers do
-        if tiers[i].price >= iqm then
-            return tiers[i].price
-        end
-    end
-
-    -- Fallback: return the highest tier price
-    return tiers[#tiers].price
+    return nil
 end
 
 --- Format a copper amount into a human-readable gold/silver/copper string.

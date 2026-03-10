@@ -1,6 +1,6 @@
 # FlipScan
 
-A World of Warcraft retail addon that analyzes Auction House commodity listings in real time and visually marks items that are profitable to flip after accounting for the 5% AH transaction cut. Works best with **Auctionator** for market pricing data.
+A World of Warcraft retail addon that analyzes Auction House commodity listings in real time and visually marks items that are profitable to flip after accounting for the 5% AH transaction cut. Uses a gap + wall detection algorithm to find a concrete sell point from the visible price tiers. Works best with **Auctionator** for broader AH tab coverage.
 
 ## Installation
 
@@ -15,14 +15,14 @@ A World of Warcraft retail addon that analyzes Auction House commodity listings 
 ## Features
 
 - **Color-coded overlays** on AH commodity result rows:
-  - Green: profitable flip above your minimum margin threshold
-  - Red: would lose money (or fail to meet margin) after the 5% AH cut
-  - No overlay: item has no known market value
-- **Margin % on every row** — each row shows margin text right-aligned (e.g. "+12.3%" in green rows, "-4.1%" in red rows). The first red row (the sell point) displays a "SELL" label instead.
-- **Sell-at display** — a "FlipScan: Sell at Xg Xs" indicator appears near the buy button showing the current IQM market value for the item you are viewing
-- **IQM market value** — an Interquartile Mean algorithm trims the bottom and top 25% of supply by quantity, computes a weighted mean of the middle 50%, then snaps to the first real tier price at or above the IQM. This is resistant to quantity walls and outlier listings.
+  - Green: priced below the sell point -- profitable to buy and relist
+  - Red: at or above the sell point, or no valid sell point found (e.g. blocked by a wall)
+  - No overlay: insufficient listing data to detect a sell point
+- **Margin % on every row** — each row shows margin text right-aligned (e.g. "+12.3%" in green rows, "-4.1%" in red rows). The sell point row displays a "SELL" label instead.
+- **Sell-at display** — a "FlipScan: Sell at Xg Xs" indicator appears near the buy button showing the detected sell point for the item you are viewing
+- **Gap + Wall sell point detection** — walks price tiers cheapest-to-expensive looking for a significant price gap (where buying at one tier and reselling at the next would be profitable after the AH cut). The tier above the gap is the sell point. A wall filter rejects sell points that sit behind a quantity wall (see below).
 - **Purchase tracking** — after buying commodities, a chat message summarizes the quantity bought, total cost, average cost per item, and the minimum resell price needed to clear your configured margin
-- **Tooltip injection** showing a full profit breakdown when hovering AH listings
+- **Tooltip injection** showing a "Sell Target" price and full profit breakdown when hovering AH listings
 - **Configurable minimum margin** to filter out low-profit flips (default 7.5%, adjustable in 0.5% steps)
 - **Optional minimum profit floor** — set an absolute gold threshold so marginal copper-level "flips" are ignored
 - **Settings UI** under Game Menu > Interface > AddOns > FlipScan
@@ -55,17 +55,16 @@ Margin %       = (Net Profit / Purchase Price) * 100
 
 An item is flagged as "flippable" when `Margin % >= your configured minimum margin` (default: 7.5%).
 
-### IQM Market Value Algorithm
+### Gap + Wall Sell Point Algorithm
 
-FlipScan computes its sale reference price using an **Interquartile Mean (IQM)** of currently visible AH listings:
+FlipScan determines its sell point by scanning the visible AH price tiers for a profitable gap:
 
-1. All visible commodity listings are bucketed into price tiers (price + quantity).
+1. All visible commodity listings are bucketed into price tiers (price + quantity), sorted cheapest-to-expensive.
 2. Tiers above `maxPriceTiers` (default 50) are discarded to exclude extreme outliers.
-3. The bottom 25% and top 25% of supply (by quantity) are trimmed. The trim percentage is configurable via `iqmTrimPercent`.
-4. A quantity-weighted mean is computed over the remaining middle 50% of supply.
-5. The IQM is "snapped" to the first real tier price at or above the computed mean, so the market value is always a concrete, listable price.
-
-This approach is naturally resistant to quantity walls (large stacks at a single price point) and outlier listings at both ends of the distribution.
+3. FlipScan walks consecutive tiers looking for the first **price gap** where buying at tier N and reselling at tier N+1 would be profitable after the 5% AH cut (using the configured minimum margin and minimum profit settings).
+4. The tier above the gap (tier N+1) becomes the **sell point candidate** -- the price at which you should list your items.
+5. **Wall detection**: Before accepting the candidate, FlipScan checks every tier from the cheapest through the sell point. If any single tier holds more than `wallFractionPercent` (default 40%) of the total supply in that range, the candidate is rejected as being behind a wall that would be impractical to undercut. The algorithm then continues searching for the next gap.
+6. If a valid sell point is found, rows below it are marked green (profitable to buy), the sell point row shows a "SELL" label, and a "Sell at" display appears near the buy button. If no valid sell point exists (no gap found, or every candidate is behind a wall), all rows show red.
 
 ## Configuration
 
@@ -79,23 +78,23 @@ Settings persist across `/reload` and login/logout via SavedVariables.
 | `noFlipColor` | Red (1,0,0,0.4) | Overlay color for money-losing listings |
 | `minProfitGold` | `0` | Minimum absolute profit in gold required for a flip (0 = disabled) |
 | `showTooltipDetail` | `true` | Show profit breakdown in item tooltips |
-| `maxPriceTiers` | `50` | Cap on the number of price tiers used for IQM calculation; tiers beyond this are discarded |
-| `iqmTrimPercent` | `25` | Percentage of supply trimmed from each end (bottom and top) before computing the IQM weighted mean |
+| `maxPriceTiers` | `50` | Cap on the number of price tiers considered; tiers beyond this are discarded as outliers |
+| `wallFractionPercent` | `40` | A single tier holding more than this percentage of total supply between the cheapest listing and the sell point candidate is treated as a wall, causing the candidate to be rejected |
 
 ## Known Limitations
 
 - **Deposit costs are not factored in.** The AH deposit (refunded on successful sale) is not subtracted from profit calculations. For expensive items with long listing durations, actual profit may be slightly lower.
-- **Commodity-focused.** The IQM algorithm operates on the visible commodity listing tiers. Browse-level summary rows (one row per item) are intentionally skipped because they lack the listing depth needed for meaningful analysis.
-- **Visible listings only.** The market value is computed from whichever tiers are currently loaded in the AH window. If the full listing depth has not loaded yet, the IQM will be based on a partial dataset.
+- **Commodity-focused.** The gap + wall algorithm operates on the visible commodity listing tiers. Browse-level summary rows (one row per item) are intentionally skipped because they lack the listing depth needed for meaningful analysis.
+- **Visible listings only.** The sell point is computed from whichever tiers are currently loaded in the AH window. If the full listing depth has not loaded yet, the algorithm will be working with a partial dataset.
 - **No Classic/Wrath support.** Targets the retail WoW API (`C_AuctionHouse`).
 
-## How the Market Value Pipeline Works
+## How the Sell Point Pipeline Works
 
-FlipScan computes its own market value from the raw AH listings visible on screen. No external price source is required.
+FlipScan determines its sell point from the raw AH listings visible on screen. No external price source is required.
 
-1. **ListingCollector** receives every visible listing (price + quantity) and buckets them into price tiers.
-2. **Calculator.FindMarketValue()** runs the IQM algorithm on the collected tiers to produce a single market value.
-3. **AuctioneerHook** feeds each row's buy price and the computed market value into **Calculator.IsFlippable()** and applies green/red overlays accordingly.
+1. **AuctioneerHook** collects every visible listing (price + quantity) and buckets them into price tiers.
+2. **Calculator.FindSellPoint()** walks the tiers looking for a profitable gap and validates the candidate against the wall filter.
+3. **AuctioneerHook** feeds each row's buy price and the sell point into **Calculator.IsFlippable()** and applies green/red overlays accordingly.
 
 ## File Structure
 
@@ -104,9 +103,9 @@ FlipScan/
 ├── FlipScan.toc          # Addon metadata and load order
 ├── FlipScan.lua          # Init, event registration, namespace setup
 ├── Config.lua            # SavedVariables, defaults, get/set helpers
-├── Calculator.lua        # Profit math and IQM market value algorithm
+├── Calculator.lua        # Profit math and gap + wall sell point algorithm
 ├── ListingCollector.lua  # Batch-collects AH listings into price tiers
-├── AuctioneerHook.lua    # Hook layer into Blizzard & Auctionator AH rows
+├── AuctioneerHook.lua    # Hook layer into Blizzard & Auctionator AH rows; builds tiers and drives sell point detection
 ├── Overlay.lua           # Colored overlays and margin text per row
 ├── Tooltip.lua           # GameTooltip profit injection
 ├── PurchaseTracker.lua   # Post-purchase chat summary (cost, avg, resell)
