@@ -15,6 +15,7 @@ FlipScan.Commands = {}
 FlipScan.Tooltip = {}
 FlipScan.SettingsPanel = {}
 FlipScan.ListingCollector = {}
+FlipScan.PurchaseTracker = {}
 
 -- Debug state (toggled at runtime, not persisted)
 FlipScan.debugMode = false
@@ -86,6 +87,11 @@ function FlipScan:OnAddonLoaded()
     -- Initialize tooltip injection
     SafeInit("Tooltip", function()
         if self.Tooltip and self.Tooltip.Init then self.Tooltip:Init() end
+    end)
+
+    -- Initialize purchase tracker
+    SafeInit("PurchaseTracker", function()
+        if self.PurchaseTracker and self.PurchaseTracker.Init then self.PurchaseTracker:Init() end
     end)
 
     -- Report load status

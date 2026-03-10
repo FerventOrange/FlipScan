@@ -6,15 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-- Outlier/joke listings far above market price no longer inflate the anchor price. `FindAnchorPrice` now trims outlier tiers from the top of the price distribution before anchor detection (50% supply cap prevents over-trimming).
-
-### Changed
-- Default minimum margin raised from 5% to 7.5% to prevent marginal spreads from showing as profitable after the 5% AH cut.
+## [0.4.0] - 2026-03-09
 
 ### Added
+- IQM (Interquartile Mean) market value algorithm replacing the 70th-percentile anchor. Trims bottom/top 25% of supply, computes weighted mean, snaps to first real tier price >= IQM. Resistant to quantity walls and outliers.
+- Margin % text on every AH overlay row (+X.X% for green, -X.X% for red).
+- "SELL" label on the first red row indicating the sell point.
+- "Sell at" display near the buy button showing the current market value.
+- Purchase tracking: chat summary after commodity buys showing qty, total cost, avg cost, min resell price.
+- `iqmTrimPercent` config option (default 25).
+- New `PurchaseTracker.lua` module.
 - Optional `minProfitGold` config (default 0 = disabled) -- sets an absolute minimum profit floor in gold for flip detection.
 - Settings panel margin slider now supports 0.5% increments with decimal display.
+
+### Changed
+- `maxPriceTiers` default raised from 15 to 50.
+- Tooltip now shows "Market Value" instead of "Resell Anchor".
+- Source label changed from "Anchor" to "IQM".
+- Default minimum margin raised from 5% to 7.5% to prevent marginal spreads from showing as profitable after the 5% AH cut.
+
+### Removed
+- `gapThresholdPercent`, `gapMinSupplyAbovePercent`, `anchorPercentile` config options.
+- `TrimOutlierTiers` and `FindAnchorPrice` functions (replaced by `FindMarketValue`).
+
+### Fixed
+- Outlier/joke listings far above market price no longer inflate the anchor price. `FindAnchorPrice` now trims outlier tiers from the top of the price distribution before anchor detection (50% supply cap prevents over-trimming).
 
 ## [0.3.0] - 2026-03-09
 

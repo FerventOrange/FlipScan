@@ -1,11 +1,11 @@
 -- FlipScan: Listing Collector
 -- Batch-collects visible AH listings per item, buckets them into price tiers,
--- and computes a resell anchor price via Calculator.FindAnchorPrice().
+-- and computes a resell anchor price via Calculator.FindMarketValue().
 
 local FlipScan = FlipScan
 
--- Internal storage: _items[itemKey] = { tiers = {}, totalQty = 0, anchorPrice = nil, dirty = true }
--- tiers is a price→qty lookup that gets converted to a sorted array when computing the anchor.
+-- Internal storage: _items[itemKey] = { tiers = {}, totalQty = 0, marketValue = nil, dirty = true }
+-- tiers is a price→qty lookup that gets converted to a sorted array when computing market value.
 FlipScan.ListingCollector._items = {}
 
 --- Clear collected data for an item, or all items if no key is given.
@@ -27,7 +27,7 @@ function FlipScan.ListingCollector:AddListing(itemKey, price, quantity)
     quantity = quantity or 1
 
     if not self._items[itemKey] then
-        self._items[itemKey] = { priceBuckets = {}, totalQty = 0, anchorPrice = nil, dirty = true }
+        self._items[itemKey] = { priceBuckets = {}, totalQty = 0, marketValue = nil, dirty = true }
     end
 
     local data = self._items[itemKey]
@@ -39,16 +39,16 @@ end
 --- Compute and return the resell anchor price for an item.
 -- Caches the result until new listings are added or the item is reset.
 -- @param itemKey (string|number) The item grouping key (itemID).
--- @return anchorPrice (number|nil) The resell anchor price in copper, or nil if no data.
-function FlipScan.ListingCollector:GetAnchorPrice(itemKey)
+-- @return marketValue (number|nil) The resell anchor price in copper, or nil if no data.
+function FlipScan.ListingCollector:GetMarketValue(itemKey)
     if not itemKey then return nil end
 
     local data = self._items[itemKey]
     if not data then return nil end
 
     -- Return cached value if clean
-    if not data.dirty and data.anchorPrice then
-        return data.anchorPrice
+    if not data.dirty and data.marketValue then
+        return data.marketValue
     end
 
     -- Build sorted tiers array from price buckets
@@ -78,14 +78,14 @@ function FlipScan.ListingCollector:GetAnchorPrice(itemKey)
     end
 
     -- Delegate to Calculator for the pure-math anchor computation
-    data.anchorPrice = FlipScan.Calculator.FindAnchorPrice(tiers, cappedQty)
+    data.marketValue = FlipScan.Calculator.FindMarketValue(tiers, cappedQty)
     data.dirty = false
 
     FlipScan:Debug(string.format(
         "ListingCollector: item=%s tiers=%d totalQty=%d anchor=%s",
         tostring(itemKey), #tiers, cappedQty,
-        data.anchorPrice and FlipScan.Calculator.FormatGold(data.anchorPrice) or "nil"
+        data.marketValue and FlipScan.Calculator.FormatGold(data.marketValue) or "nil"
     ))
 
-    return data.anchorPrice
+    return data.marketValue
 end

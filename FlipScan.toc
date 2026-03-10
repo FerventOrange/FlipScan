@@ -13,5 +13,6 @@ ListingCollector.lua
 AuctioneerHook.lua
 Overlay.lua
 Tooltip.lua
+PurchaseTracker.lua
 Commands.lua
 SettingsPanel.lua

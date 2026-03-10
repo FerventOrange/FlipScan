@@ -35,6 +35,11 @@ local function GetOrCreateOverlay(rowFrame)
     local tex = overlayFrame:CreateTexture(nil, "ARTWORK", nil, -8)
     tex:SetAllPoints(overlayFrame)
 
+    -- Margin/label text right-aligned on the row
+    local text = overlayFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    text:SetPoint("RIGHT", overlayFrame, "RIGHT", -8, 0)
+    overlayFrame.marginText = text
+
     -- Store references
     rowFrame._flipScanOverlay = overlayFrame
     overlayFrame.texture = tex
@@ -56,6 +61,19 @@ function FlipScan.Overlay:ApplyRowOverlay(rowFrame, flipData)
         overlay.texture:SetColorTexture(goodColor.r, goodColor.g, goodColor.b, goodColor.a)
     else
         overlay.texture:SetColorTexture(badColor.r, badColor.g, badColor.b, badColor.a)
+    end
+
+    -- Update margin text or SELL label
+    if overlay.marginText then
+        if flipData.isFirstRed then
+            overlay.marginText:SetText("\xe2\x97\x84 SELL")
+            overlay.marginText:SetTextColor(1, 1, 1, 1)
+        else
+            local sign = flipData.marginPct >= 0 and "+" or ""
+            overlay.marginText:SetText(string.format("%s%.1f%%", sign, flipData.marginPct))
+            overlay.marginText:SetTextColor(1, 1, 1, 0.9)
+        end
+        overlay.marginText:Show()
     end
 
     -- Store the flip data on the row frame for tooltip access
@@ -81,6 +99,9 @@ function FlipScan.Overlay:ClearRowOverlay(rowFrame)
     if not rowFrame then return end
     if rowFrame._flipScanOverlay then
         rowFrame._flipScanOverlay:Hide()
+        if rowFrame._flipScanOverlay.marginText then
+            rowFrame._flipScanOverlay.marginText:SetText("")
+        end
     end
     rowFrame._flipScanData = nil
 end
