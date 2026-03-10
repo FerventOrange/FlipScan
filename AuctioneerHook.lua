@@ -241,7 +241,8 @@ end
 
 --- Apply overlays to all pending Auctionator rows using the computed anchor price.
 function FlipScan.Hooks:ApplyAuctionatorBatch()
-    local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
+    local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
+    local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
 
     -- Count items for debug
     local itemCount = 0
@@ -267,7 +268,7 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
             if anchorPrice then
                 for _, entry in ipairs(rows) do
                     local isFlippable, netProfit, marginPct =
-                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin)
+                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin, minProfit)
 
                     FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
                         itemLink = entry.itemLink,
@@ -491,12 +492,13 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     if #rowEntries == 0 then return end
 
     -- Pass 2: Compute anchors and apply overlays
-    local minMargin = FlipScan.Config:Get("minMarginPercent") or 5
+    local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
+    local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
     for _, entry in ipairs(rowEntries) do
         local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(entry.itemID)
         if anchorPrice then
             local isFlippable, netProfit, marginPct =
-                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin)
+                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin, minProfit)
 
             FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
                 itemLink = entry.itemLink,

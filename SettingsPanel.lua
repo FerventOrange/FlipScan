@@ -67,7 +67,7 @@ function FlipScan.SettingsPanel:CreatePanel()
     ---------------------------------------------------------------
     local marginSlider = self:CreateSlider(
         panel, "Minimum Profit Margin (%)", yOffset,
-        0, 50, 1,
+        0, 50, 0.5,
         function() return FlipScan.Config:Get("minMarginPercent") end,
         function(value) FlipScan.Config:Set("minMarginPercent", value) end
     )
@@ -131,12 +131,12 @@ function FlipScan.SettingsPanel:CreateSlider(parent, label, yOffset, minVal, max
     -- Value label next to the slider
     local valueText = slider:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     valueText:SetPoint("LEFT", slider, "RIGHT", 10, 0)
-    valueText:SetText(getter() .. "%")
+    valueText:SetText(string.format("%.1f%%", getter()))
 
     slider:SetScript("OnValueChanged", function(_, value)
-        value = math.floor(value + 0.5)  -- Round to integer
+        value = math.floor(value / step + 0.5) * step  -- Round to nearest step
         setter(value)
-        valueText:SetText(value .. "%")
+        valueText:SetText(string.format("%.1f%%", value))
     end)
 
     return slider

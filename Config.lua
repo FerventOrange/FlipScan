@@ -6,7 +6,8 @@ local FlipScan = FlipScan
 -- Default database values. Any key missing from the player's SavedVariables
 -- will be filled in from this table on load.
 local defaults = {
-    minMarginPercent = 5,           -- Min net profit % after AH cut to flag as flippable
+    minMarginPercent = 7.5,         -- Min net profit % after AH cut to flag as flippable
+    minProfitGold = 0,              -- Min absolute profit in gold (0 = disabled)
     highlightColor = { r = 0, g = 1, b = 0, a = 0.4 },   -- Green tint for profitable flips
     noFlipColor    = { r = 1, g = 0, b = 0, a = 0.4 },    -- Red tint for money-losing flips
     showTooltipDetail = true,       -- Inject net profit breakdown into item tooltips
