@@ -16,11 +16,13 @@ FlipScan.Calculator.SELLER_KEEPS = SELLER_KEEPS
 --                         This is what you expect to resell it for.
 -- @param minMarginPercent (number) The minimum net profit margin (%) to qualify
 --                         as "flippable". For example, 5 means at least 5% profit.
+-- @param minProfit        (number|nil) Optional minimum net profit in copper.
+--                         0 or nil disables this check.
 --
 -- @return isFlippable      (boolean) True if net profit meets the minimum margin.
 -- @return netProfit        (number)  Estimated profit in copper (can be negative).
 -- @return netMarginPercent (number)  Net margin as a percentage of purchase cost.
-function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMarginPercent)
+function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMarginPercent, minProfit)
     -- Guard against invalid inputs
     if not buyoutPerItem or buyoutPerItem <= 0 then
         return false, 0, 0
@@ -34,19 +36,60 @@ function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMargi
 
     -- When you resell at the reference price, the AH takes its 5% cut.
     -- You receive: referencePrice * 0.95
-    local proceedsAfterCut = referencePrice * SELLER_KEEPS
+    local revenueAfterCut = referencePrice * SELLER_KEEPS
 
     -- Net profit = what you receive minus what you paid
-    local netProfit = proceedsAfterCut - purchaseCost
+    local netProfit = revenueAfterCut - purchaseCost
 
     -- Net margin as a percentage of the purchase cost
     -- e.g. if you paid 100g and net 10g, margin = 10%
     local netMarginPercent = (netProfit / purchaseCost) * 100
 
     -- A flip qualifies if the margin meets or exceeds the minimum threshold
+    -- and (optionally) the absolute profit meets the minimum floor
     local isFlippable = netMarginPercent >= (minMarginPercent or 0)
+        and netProfit >= (minProfit or 0)
 
     return isFlippable, netProfit, netMarginPercent
+end
+
+--- Trim outlier tiers from the top of the price distribution.
+--
+-- Walks tiers top-down (highest to lowest). If the gap between a tier and the
+-- one below it exceeds gapThreshold (fractional, e.g. 0.20 = 20%), the tier is
+-- removed. Stops early if cumulative excluded supply exceeds 50% of totalQty
+-- to avoid trimming the real market.
+--
+-- @param tiers        (table)  Array of { price, qty }, sorted by price ascending.
+-- @param totalQty     (number) Sum of all tier quantities.
+-- @param gapThreshold (number) Fractional gap threshold (e.g. 0.20 for 20%).
+-- @return tiers    (table)  The trimmed tiers array (same reference, modified in-place).
+-- @return totalQty (number) Recalculated total quantity from remaining tiers.
+local function TrimOutlierTiers(tiers, totalQty, gapThreshold)
+    local maxExclude = totalQty * 0.50
+    local excluded = 0
+
+    local i = #tiers
+    while i >= 2 do
+        local gap = (tiers[i].price - tiers[i - 1].price) / tiers[i - 1].price
+        if gap >= gapThreshold then
+            local tierQty = tiers[i].qty
+            if excluded + tierQty > maxExclude then
+                break
+            end
+            excluded = excluded + tierQty
+            table.remove(tiers, i)
+        else
+            break
+        end
+        i = i - 1
+    end
+
+    if excluded > 0 then
+        totalQty = totalQty - excluded
+    end
+
+    return tiers, totalQty
 end
 
 --- Find the resell anchor price from a sorted list of price tiers.
@@ -74,6 +117,21 @@ function FlipScan.Calculator.FindAnchorPrice(tiers, totalQty)
     local gapThreshold = (FlipScan.Config:Get("gapThresholdPercent") or 20) / 100
     local gapMinSupplyAbove = (FlipScan.Config:Get("gapMinSupplyAbovePercent") or 20) / 100
     local anchorPercentile = (FlipScan.Config:Get("anchorPercentile") or 70) / 100
+
+    -- Shallow-copy tiers so trimming does not mutate the caller's array
+    local trimmed = {}
+    for idx = 1, #tiers do trimmed[idx] = tiers[idx] end
+
+    -- Trim outlier tiers from the top before anchor detection
+    tiers, totalQty = TrimOutlierTiers(trimmed, totalQty, gapThreshold)
+
+    -- After trimming, if only one tier remains, return it directly
+    if #tiers == 1 then
+        return tiers[1].price
+    end
+    if #tiers == 0 or totalQty <= 0 then
+        return nil
+    end
 
     -- Pass 1: Gap detection
     -- Walk tiers and find the first significant price jump with enough supply above it.

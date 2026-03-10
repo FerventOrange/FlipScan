@@ -21,7 +21,9 @@ A World of Warcraft retail addon that analyzes Auction House listings in real ti
   - Red: would lose money (or fail to meet margin) after the 5% AH cut
   - No overlay: item has no known market value
 - **Tooltip injection** showing a full profit breakdown when hovering AH listings
-- **Configurable minimum margin** to filter out low-profit flips
+- **Outlier-trimmed anchor pricing** — joke and far-above-market listings are stripped before computing the sale reference price
+- **Configurable minimum margin** to filter out low-profit flips (default 7.5%, adjustable in 0.5% steps)
+- **Optional minimum profit floor** — set an absolute gold threshold so marginal copper-level "flips" are ignored
 - **Settings UI** under Game Menu > Interface > AddOns > FlipScan
 - **Slash commands** for quick runtime control
 
@@ -50,7 +52,9 @@ Net Profit     = Net Proceeds - Purchase Price
 Margin %       = (Net Profit / Purchase Price) * 100
 ```
 
-An item is flagged as "flippable" when `Margin % >= your configured minimum margin` (default: 5%).
+An item is flagged as "flippable" when `Margin % >= your configured minimum margin` (default: 7.5%).
+
+Before computing the anchor (sale) price, `FindAnchorPrice` trims outlier and joke listings from the top of the price distribution. This prevents items with a small raw price spread from appearing as profitable flips when the anchor would otherwise be inflated by far-above-market outliers.
 
 ### Price Reference Sources (priority order)
 
@@ -64,9 +68,10 @@ Settings persist across `/reload` and login/logout via SavedVariables.
 | Setting | Default | Description |
 |---|---|---|
 | `enabled` | `true` | Master on/off toggle |
-| `minMarginPercent` | `5` | Minimum net profit % to flag as flippable |
+| `minMarginPercent` | `7.5` | Minimum net profit % to flag as flippable (slider supports 0.5% increments) |
 | `highlightColor` | Green (0,1,0,0.4) | Overlay color for profitable flips |
 | `noFlipColor` | Red (1,0,0,0.4) | Overlay color for money-losing listings |
+| `minProfitGold` | `0` | Minimum absolute profit in gold required for a flip (0 = disabled) |
 | `showTooltipDetail` | `true` | Show profit breakdown in item tooltips |
 
 ## Known Limitations
