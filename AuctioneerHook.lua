@@ -239,7 +239,7 @@ function FlipScan.Hooks:OnAuctionatorRowPopulate(rowFrame, rowData, dataIndex)
     end)
 end
 
---- Apply overlays to all pending Auctionator rows using the computed anchor price.
+--- Apply overlays to all pending Auctionator rows using the computed market value.
 function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
@@ -260,31 +260,49 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                 FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
             end
         else
-            local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(itemID)
+            local marketValue = FlipScan.ListingCollector:GetMarketValue(itemID)
             FlipScan:Debug(string.format(
-                "Batch: item=%d anchor=%s",
-                itemID, anchorPrice and FlipScan.Calculator.FormatGold(anchorPrice) or "nil"
+                "Batch: item=%d marketValue=%s",
+                itemID, marketValue and FlipScan.Calculator.FormatGold(marketValue) or "nil"
             ))
-            if anchorPrice then
-                for _, entry in ipairs(rows) do
+            if marketValue then
+                -- First pass: compute flip data for all rows
+                local flipResults = {}
+                local firstRedIdx = nil
+                for i, entry in ipairs(rows) do
                     local isFlippable, netProfit, marginPct =
-                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin, minProfit)
-
-                    FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
+                        FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, marketValue, minMargin, minProfit)
+                    flipResults[i] = {
                         itemLink = entry.itemLink,
                         buyoutPerItem = entry.buyoutPerItem,
-                        referencePrice = anchorPrice,
-                        source = "Anchor",
+                        referencePrice = marketValue,
+                        source = "IQM",
                         netProfit = netProfit,
                         marginPct = marginPct,
                         isFlippable = isFlippable,
-                    })
+                    }
+                    if not isFlippable and not firstRedIdx then
+                        firstRedIdx = i
+                    end
                 end
+
+                -- Mark the first red row
+                if firstRedIdx then
+                    flipResults[firstRedIdx].isFirstRed = true
+                end
+
+                -- Second pass: apply overlays
+                for i, entry in ipairs(rows) do
+                    FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
+                end
+
+                self:UpdateSellAtDisplay(marketValue)
             else
-                FlipScan:Debug("Batch: no anchor price, clearing overlays")
+                FlipScan:Debug("Batch: no market value, clearing overlays")
                 for _, entry in ipairs(rows) do
                     FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
                 end
+                self:UpdateSellAtDisplay(nil)
             end
         end
     end
@@ -310,6 +328,7 @@ function FlipScan.Hooks:HookBlizzardAH()
         if event == "AUCTION_HOUSE_CLOSED" then
             FlipScan.Overlay:HideAll()
             FlipScan.ListingCollector:Reset()
+            FlipScan.Hooks:UpdateSellAtDisplay(nil)
             return
         end
 
@@ -491,29 +510,99 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     -- Nothing to process (all rows Auctionator-managed or empty)
     if #rowEntries == 0 then return end
 
-    -- Pass 2: Compute anchors and apply overlays
+    -- Pass 2: Compute market values and build flip data
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
-    for _, entry in ipairs(rowEntries) do
-        local anchorPrice = FlipScan.ListingCollector:GetAnchorPrice(entry.itemID)
-        if anchorPrice then
-            local isFlippable, netProfit, marginPct =
-                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, anchorPrice, minMargin, minProfit)
+    local flipResults = {}
+    local firstRedIdx = nil
+    local lastMarketValue = nil
 
-            FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, {
+    for i, entry in ipairs(rowEntries) do
+        local marketValue = FlipScan.ListingCollector:GetMarketValue(entry.itemID)
+        if marketValue then
+            lastMarketValue = marketValue
+            local isFlippable, netProfit, marginPct =
+                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, marketValue, minMargin, minProfit)
+
+            flipResults[i] = {
                 itemLink = entry.itemLink,
                 buyoutPerItem = entry.buyoutPerItem,
-                referencePrice = anchorPrice,
-                source = "Anchor",
+                referencePrice = marketValue,
+                source = "IQM",
                 netProfit = netProfit,
                 marginPct = marginPct,
                 isFlippable = isFlippable,
-            })
+            }
+            if not isFlippable and not firstRedIdx then
+                firstRedIdx = i
+            end
+        end
+    end
+
+    -- Mark the first red row
+    if firstRedIdx and flipResults[firstRedIdx] then
+        flipResults[firstRedIdx].isFirstRed = true
+    end
+
+    -- Pass 3: Apply overlays
+    for i, entry in ipairs(rowEntries) do
+        if flipResults[i] then
+            FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
         else
             FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
         end
     end
+
+    self:UpdateSellAtDisplay(lastMarketValue)
 end
+
+-----------------------------------------------------------------------
+-- Sell-At Display (near the buy button)
+-----------------------------------------------------------------------
+
+--- Get or create the "Sell at" FontString near the AH buy button.
+local function GetOrCreateSellAtText()
+    if FlipScan.Hooks._sellAtText then
+        return FlipScan.Hooks._sellAtText
+    end
+
+    -- Try to anchor near the Blizzard commodity buy button
+    local parent = nil
+    if AuctionHouseFrame and AuctionHouseFrame.CommoditiesBuyFrame then
+        parent = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
+            or AuctionHouseFrame.CommoditiesBuyFrame
+    end
+    if not parent then
+        parent = AuctionHouseFrame
+    end
+    if not parent then return nil end
+
+    local text = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    text:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 10, 8)
+    text:SetTextColor(0, 0.8, 1, 1)  -- Cyan to match addon branding
+    text:Hide()
+
+    FlipScan.Hooks._sellAtText = text
+    return text
+end
+
+--- Update (or hide) the "Sell at" display with the current market value.
+-- @param marketValue (number|nil) The market value in copper, or nil to hide.
+function FlipScan.Hooks:UpdateSellAtDisplay(marketValue)
+    local text = GetOrCreateSellAtText()
+    if not text then return end
+
+    if marketValue and marketValue > 0 then
+        text:SetText("FlipScan: Sell at " .. FlipScan.Calculator.FormatGold(marketValue))
+        text:Show()
+    else
+        text:Hide()
+    end
+end
+
+-----------------------------------------------------------------------
+-- Blizzard Row Data Extraction
+-----------------------------------------------------------------------
 
 --- Extract price, item link, item ID, and quantity from a Blizzard row.
 -- @param rowFrame (Frame) The AH result row frame.

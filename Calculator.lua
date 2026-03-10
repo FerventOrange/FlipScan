@@ -53,115 +53,77 @@ function FlipScan.Calculator.IsFlippable(buyoutPerItem, referencePrice, minMargi
     return isFlippable, netProfit, netMarginPercent
 end
 
---- Trim outlier tiers from the top of the price distribution.
+--- Compute the market value using an Interquartile Mean, then snap to a real tier.
 --
--- Walks tiers top-down (highest to lowest). If the gap between a tier and the
--- one below it exceeds gapThreshold (fractional, e.g. 0.20 = 20%), the tier is
--- removed. Stops early if cumulative excluded supply exceeds 50% of totalQty
--- to avoid trimming the real market.
+-- The IQM trims the bottom and top portions of the supply distribution by quantity,
+-- then computes a weighted mean of the remaining middle portion. This is naturally
+-- resistant to quantity walls and cheap/expensive outliers.
 --
--- @param tiers        (table)  Array of { price, qty }, sorted by price ascending.
--- @param totalQty     (number) Sum of all tier quantities.
--- @param gapThreshold (number) Fractional gap threshold (e.g. 0.20 for 20%).
--- @return tiers    (table)  The trimmed tiers array (same reference, modified in-place).
--- @return totalQty (number) Recalculated total quantity from remaining tiers.
-local function TrimOutlierTiers(tiers, totalQty, gapThreshold)
-    local maxExclude = totalQty * 0.50
-    local excluded = 0
-
-    local i = #tiers
-    while i >= 2 do
-        local gap = (tiers[i].price - tiers[i - 1].price) / tiers[i - 1].price
-        if gap >= gapThreshold then
-            local tierQty = tiers[i].qty
-            if excluded + tierQty > maxExclude then
-                break
-            end
-            excluded = excluded + tierQty
-            table.remove(tiers, i)
-        else
-            break
-        end
-        i = i - 1
-    end
-
-    if excluded > 0 then
-        totalQty = totalQty - excluded
-    end
-
-    return tiers, totalQty
-end
-
---- Find the resell anchor price from a sorted list of price tiers.
+-- After computing the IQM, the result is "snapped" to the first real tier price
+-- that is >= the IQM. This ensures the market value is a concrete, listable price.
 --
--- Uses a two-pass approach:
---   1. Gap detection: walk tiers low→high, find the first price jump ≥ gapThreshold%
---      where ≥ gapMinSupplyAbove% of total supply exists at or above the gap.
---      The tier after the gap is the anchor — that's where the market "really" sits.
---   2. Percentile fallback: if no gap qualifies, find the tier where cumulative
---      quantity reaches anchorPercentile% of total supply.
---
--- @param tiers    (table) Array of { price = number, qty = number }, sorted by price ascending.
+-- @param tiers    (table)  Array of { price = number, qty = number }, sorted by price ascending.
 -- @param totalQty (number) Sum of all tier quantities.
--- @return anchorPrice (number|nil) The resell anchor price in copper, or nil if no tiers.
-function FlipScan.Calculator.FindAnchorPrice(tiers, totalQty)
+-- @return marketValue (number|nil) The market value in copper, or nil if no tiers.
+function FlipScan.Calculator.FindMarketValue(tiers, totalQty)
     if not tiers or #tiers == 0 or not totalQty or totalQty <= 0 then
         return nil
     end
 
-    -- Single tier — no spread to exploit, anchor is the only price
+    -- Single tier — market value is the only price
     if #tiers == 1 then
         return tiers[1].price
     end
 
-    local gapThreshold = (FlipScan.Config:Get("gapThresholdPercent") or 20) / 100
-    local gapMinSupplyAbove = (FlipScan.Config:Get("gapMinSupplyAbovePercent") or 20) / 100
-    local anchorPercentile = (FlipScan.Config:Get("anchorPercentile") or 70) / 100
+    -- Determine how much supply to trim from each end
+    local trimFraction = math.min((FlipScan.Config:Get("iqmTrimPercent") or 25) / 100, 0.49)
+    local trimQty = totalQty * trimFraction
 
-    -- Shallow-copy tiers so trimming does not mutate the caller's array
-    local trimmed = {}
-    for idx = 1, #tiers do trimmed[idx] = tiers[idx] end
-
-    -- Trim outlier tiers from the top before anchor detection
-    tiers, totalQty = TrimOutlierTiers(trimmed, totalQty, gapThreshold)
-
-    -- After trimming, if only one tier remains, return it directly
-    if #tiers == 1 then
-        return tiers[1].price
-    end
-    if #tiers == 0 or totalQty <= 0 then
-        return nil
+    -- Bottom trim: walk cheapest→expensive, exclude up to trimQty units
+    local bottomExclude = {}
+    local bottomRemaining = trimQty
+    for i = 1, #tiers do
+        local exclude = math.min(tiers[i].qty, bottomRemaining)
+        bottomExclude[i] = exclude
+        bottomRemaining = bottomRemaining - exclude
+        if bottomRemaining <= 0 then break end
     end
 
-    -- Pass 1: Gap detection
-    -- Walk tiers and find the first significant price jump with enough supply above it.
-    -- Also require at least 2 distinct tiers above the gap — a single massive wall
-    -- at one price is likely player manipulation, not real market depth.
-    local cumulativeQty = 0
-    for i = 1, #tiers - 1 do
-        cumulativeQty = cumulativeQty + tiers[i].qty
-        local jump = (tiers[i + 1].price - tiers[i].price) / tiers[i].price
-        if jump >= gapThreshold then
-            local supplyAbove = totalQty - cumulativeQty
-            local tiersAbove = #tiers - i
-            if supplyAbove / totalQty >= gapMinSupplyAbove and tiersAbove >= 2 then
-                return tiers[i + 1].price
-            end
+    -- Top trim: walk expensive→cheapest, exclude up to trimQty units
+    local topExclude = {}
+    local topRemaining = trimQty
+    for i = #tiers, 1, -1 do
+        local exclude = math.min(tiers[i].qty, topRemaining)
+        topExclude[i] = exclude
+        topRemaining = topRemaining - exclude
+        if topRemaining <= 0 then break end
+    end
+
+    -- Compute weighted mean of the included middle portion
+    local weightedSum = 0
+    local includedQty = 0
+    for i = 1, #tiers do
+        local included = tiers[i].qty - (bottomExclude[i] or 0) - (topExclude[i] or 0)
+        if included > 0 then
+            weightedSum = weightedSum + tiers[i].price * included
+            includedQty = includedQty + included
         end
     end
 
-    -- Pass 2: Percentile fallback
-    -- Find the tier where cumulative quantity reaches the anchor percentile.
-    local threshold = totalQty * anchorPercentile
-    cumulativeQty = 0
+    if includedQty <= 0 then
+        return tiers[1].price
+    end
+
+    local iqm = weightedSum / includedQty
+
+    -- Snap to the first real tier price >= IQM
     for i = 1, #tiers do
-        cumulativeQty = cumulativeQty + tiers[i].qty
-        if cumulativeQty >= threshold then
+        if tiers[i].price >= iqm then
             return tiers[i].price
         end
     end
 
-    -- Shouldn't reach here, but return the last tier as ultimate fallback
+    -- Fallback: return the highest tier price
     return tiers[#tiers].price
 end
 
