@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Replaced IQM (Interquartile Mean) market value algorithm with gap-based sell point detection and wall filtering. The IQM could land behind quantity walls; the new algorithm finds the first significant price gap between consecutive tiers and validates no wall blocks the sell point.
+- Tooltip label renamed from "Market Value" to "Sell Target".
+- Config `iqmTrimPercent` replaced with `wallFractionPercent` (default 40%).
+
+### Removed
+- `ListingCollector` is no longer called (dead code); tier data is now built directly from visible row data in `AuctioneerHook`.
+
+### Fixed
+- SELL label displayed garbled text (`%€2x97x84 SELL` instead of `◄ SELL`) because WoW's Lua 5.1 doesn't support `\xNN` hex escapes. Now uses `\ddd` decimal escapes.
+
 ## [0.4.0] - 2026-03-09
 
 ### Added
