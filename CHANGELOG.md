@@ -4,7 +4,7 @@ All notable changes to FlipScan will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.6.0]
 
 ### Changed
 - Replaced IQM (Interquartile Mean) market value algorithm with gap-based sell point detection and wall filtering. The IQM could land behind quantity walls; the new algorithm finds the first significant price gap between consecutive tiers and validates no wall blocks the sell point.
