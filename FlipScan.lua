@@ -14,7 +14,6 @@ FlipScan.Hooks = {}
 FlipScan.Commands = {}
 FlipScan.Tooltip = {}
 FlipScan.SettingsPanel = {}
-FlipScan.ListingCollector = {}
 FlipScan.PurchaseTracker = {}
 
 -- Debug state (toggled at runtime, not persisted)
@@ -25,7 +24,6 @@ FlipScan.hasAuctionator = false
 
 -- Addon event frame
 local eventFrame = CreateFrame("Frame", "FlipScanEventFrame")
-FlipScan.eventFrame = eventFrame
 
 eventFrame:RegisterEvent("ADDON_LOADED")
 
