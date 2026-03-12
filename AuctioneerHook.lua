@@ -240,8 +240,10 @@ end
 --- Apply overlays to all pending Auctionator rows using gap-based sell point detection.
 function FlipScan.Hooks:ApplyAuctionatorBatch()
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
+    local marginalMargin = FlipScan.Config:Get("marginalMarginPercent") or 0.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
     local wallFraction = (FlipScan.Config:Get("wallFractionPercent") or 40) / 100
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
 
     -- Count distinct items in this batch
     local itemCount = 0
@@ -259,15 +261,22 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
         end
         pendingAuctionatorRows = {}
         self:UpdateSellAtDisplay(nil)
+        self:UpdateGoldDisplay(nil)
         return
     end
 
     for itemID, rows in pairs(pendingAuctionatorRows) do
         FlipScan:Debug(string.format("Batch: item=%d rows=%d", itemID, #rows))
 
+        -- Skip ignored items
+        if ignoredItems[itemID] then
+            FlipScan:Debug("Batch: skipped (ignored item)")
+            for _, entry in ipairs(rows) do
+                FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
+            end
         -- Skip items with only 1 collected row — these are browse/shopping/
         -- cancelling rows (one row per item). No listing depth to analyze.
-        if #rows < 2 then
+        elseif #rows < 2 then
             FlipScan:Debug("Batch: skipped (single row, likely browse)")
             for _, entry in ipairs(rows) do
                 FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
@@ -313,6 +322,7 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                     netProfit = netProfit,
                     marginPct = marginPct,
                     isFlippable = isFlippable,
+                    isMarginal = (not isFlippable) and (marginPct >= marginalMargin),
                     noSellPoint = (sellPoint == nil),
                 }
                 -- Mark the sell point row with the SELL label
@@ -322,12 +332,17 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                 end
             end
 
-            -- Apply overlays
+            -- Apply overlays and sum cost of flippable rows
+            local totalFlipCost = 0
             for i, entry in ipairs(rows) do
                 FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
+                if flipResults[i].isFlippable then
+                    totalFlipCost = totalFlipCost + (entry.buyoutPerItem * entry.quantity)
+                end
             end
 
             self:UpdateSellAtDisplay(sellPoint)
+            self:UpdateGoldDisplay(totalFlipCost > 0 and totalFlipCost or nil)
         end
     end
 
@@ -350,6 +365,7 @@ function FlipScan.Hooks:HookBlizzardAH()
         if event == "AUCTION_HOUSE_CLOSED" then
             FlipScan.Overlay:HideAll()
             FlipScan.Hooks:UpdateSellAtDisplay(nil)
+            FlipScan.Hooks:UpdateGoldDisplay(nil)
             return
         end
 
@@ -528,9 +544,11 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
 
     -- Pass 2: Group by itemID, build tiers, find sell point
     local minMargin = FlipScan.Config:Get("minMarginPercent") or 7.5
+    local marginalMargin = FlipScan.Config:Get("marginalMarginPercent") or 0.5
     local minProfit = (FlipScan.Config:Get("minProfitGold") or 0) * 10000
     local wallFraction = (FlipScan.Config:Get("wallFractionPercent") or 40) / 100
     local maxTiers = FlipScan.Config:Get("maxPriceTiers") or 50
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
 
     -- Group entries by itemID
     local groups = {}
@@ -546,77 +564,94 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
     local lastSellPoint = nil
 
     for itemID, group in pairs(groups) do
-        -- Build price tiers
-        local priceBuckets = {}
-        for _, entry in ipairs(group) do
-            priceBuckets[entry.buyoutPerItem] = (priceBuckets[entry.buyoutPerItem] or 0) + entry.quantity
-        end
-        local tiers = {}
-        for price, qty in pairs(priceBuckets) do
-            tiers[#tiers + 1] = { price = price, qty = qty }
-        end
-        table.sort(tiers, function(a, b) return a.price < b.price end)
-
-        if #tiers > maxTiers then
-            for i = #tiers, maxTiers + 1, -1 do
-                tiers[i] = nil
+        -- Skip ignored items
+        if ignoredItems[itemID] then
+            FlipScan:Debug(string.format("%s: item=%d skipped (ignored)", debugLabel, itemID))
+            for _, entry in ipairs(group) do
+                -- Find this entry's index in the original rowEntries
+                for j, re in ipairs(rowEntries) do
+                    if re == entry then flipResults[j] = "ignored"; break end
+                end
             end
-        end
+        else
+            -- Build price tiers
+            local priceBuckets = {}
+            for _, entry in ipairs(group) do
+                priceBuckets[entry.buyoutPerItem] = (priceBuckets[entry.buyoutPerItem] or 0) + entry.quantity
+            end
+            local tiers = {}
+            for price, qty in pairs(priceBuckets) do
+                tiers[#tiers + 1] = { price = price, qty = qty }
+            end
+            table.sort(tiers, function(a, b) return a.price < b.price end)
 
-        local sellPoint = nil
-        if #group >= 2 then
-            sellPoint = FlipScan.Calculator.FindSellPoint(tiers, minMargin, minProfit, wallFraction)
-        end
-        if sellPoint then lastSellPoint = sellPoint end
-
-        FlipScan:Debug(string.format(
-            "%s: item=%d tiers=%d sellPoint=%s",
-            debugLabel, itemID, #tiers,
-            sellPoint and FlipScan.Calculator.FormatGold(sellPoint) or "nil"
-        ))
-
-        -- Compute flip data for each row in this group
-        local sellPointMarked = false
-        for _, entry in ipairs(group) do
-            local refPrice = sellPoint or entry.buyoutPerItem
-            local isFlippable, netProfit, marginPct =
-                FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, refPrice, minMargin, minProfit)
-
-            -- Find this entry's index in the original rowEntries
-            local idx
-            for j, re in ipairs(rowEntries) do
-                if re == entry then idx = j; break end
+            if #tiers > maxTiers then
+                for i = #tiers, maxTiers + 1, -1 do
+                    tiers[i] = nil
+                end
             end
 
-            if idx then
-                flipResults[idx] = {
-                    itemLink = entry.itemLink,
-                    buyoutPerItem = entry.buyoutPerItem,
-                    referencePrice = refPrice,
-                    source = "Gap",
-                    netProfit = netProfit,
-                    marginPct = marginPct,
-                    isFlippable = isFlippable,
-                    noSellPoint = (sellPoint == nil),
-                }
-                if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
-                    flipResults[idx].isFirstRed = true
-                    sellPointMarked = true
+            local sellPoint = nil
+            if #group >= 2 then
+                sellPoint = FlipScan.Calculator.FindSellPoint(tiers, minMargin, minProfit, wallFraction)
+            end
+            if sellPoint then lastSellPoint = sellPoint end
+
+            FlipScan:Debug(string.format(
+                "%s: item=%d tiers=%d sellPoint=%s",
+                debugLabel, itemID, #tiers,
+                sellPoint and FlipScan.Calculator.FormatGold(sellPoint) or "nil"
+            ))
+
+            -- Compute flip data for each row in this group
+            local sellPointMarked = false
+            for _, entry in ipairs(group) do
+                local refPrice = sellPoint or entry.buyoutPerItem
+                local isFlippable, netProfit, marginPct =
+                    FlipScan.Calculator.IsFlippable(entry.buyoutPerItem, refPrice, minMargin, minProfit)
+
+                -- Find this entry's index in the original rowEntries
+                local idx
+                for j, re in ipairs(rowEntries) do
+                    if re == entry then idx = j; break end
+                end
+
+                if idx then
+                    flipResults[idx] = {
+                        itemLink = entry.itemLink,
+                        buyoutPerItem = entry.buyoutPerItem,
+                        referencePrice = refPrice,
+                        source = "Gap",
+                        netProfit = netProfit,
+                        marginPct = marginPct,
+                        isFlippable = isFlippable,
+                        isMarginal = (not isFlippable) and (marginPct >= marginalMargin),
+                        noSellPoint = (sellPoint == nil),
+                    }
+                    if sellPoint and entry.buyoutPerItem == sellPoint and not sellPointMarked then
+                        flipResults[idx].isFirstRed = true
+                        sellPointMarked = true
+                    end
                 end
             end
         end
     end
 
-    -- Pass 3: Apply overlays
+    -- Pass 3: Apply overlays and sum cost of flippable rows
+    local totalFlipCost = 0
     for i, entry in ipairs(rowEntries) do
-        if flipResults[i] then
+        if flipResults[i] and flipResults[i] ~= "ignored" then
             FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
+            if flipResults[i].isFlippable then
+                totalFlipCost = totalFlipCost + (entry.buyoutPerItem * entry.quantity)
+            end
         else
             FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
         end
     end
 
     self:UpdateSellAtDisplay(lastSellPoint)
+    self:UpdateGoldDisplay(totalFlipCost > 0 and totalFlipCost or nil)
 end
 
 -----------------------------------------------------------------------
@@ -657,6 +692,72 @@ function FlipScan.Hooks:UpdateSellAtDisplay(marketValue)
 
     if marketValue and marketValue > 0 then
         text:SetText("FlipScan: Sell at " .. FlipScan.Calculator.FormatGold(marketValue))
+        text:Show()
+    else
+        text:Hide()
+    end
+end
+
+-----------------------------------------------------------------------
+-- Gold Sufficiency Display (below the buy button)
+-----------------------------------------------------------------------
+
+--- Get or create the gold sufficiency FontString below the AH buy button.
+local function GetOrCreateGoldText()
+    if FlipScan.Hooks._goldText then
+        return FlipScan.Hooks._goldText
+    end
+
+    -- Try to anchor below the Blizzard commodity buy button
+    local buyButton = nil
+    if AuctionHouseFrame and AuctionHouseFrame.CommoditiesBuyFrame then
+        local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
+        if buyDisplay and buyDisplay.BuyButton then
+            buyButton = buyDisplay.BuyButton
+        end
+    end
+    if not buyButton and AuctionHouseFrame and AuctionHouseFrame.ItemBuyFrame then
+        local buyoutFrame = AuctionHouseFrame.ItemBuyFrame.BuyoutFrame
+        if buyoutFrame and buyoutFrame.BuyoutButton then
+            buyButton = buyoutFrame.BuyoutButton
+        end
+    end
+
+    local parent = buyButton or (AuctionHouseFrame and AuctionHouseFrame.CommoditiesBuyFrame) or AuctionHouseFrame
+    if not parent then return nil end
+
+    local text = parent:GetParent():CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    if buyButton then
+        text:SetPoint("TOP", buyButton, "BOTTOM", 0, -4)
+    else
+        text:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 10, -16)
+    end
+    text:Hide()
+
+    FlipScan.Hooks._goldText = text
+    return text
+end
+
+--- Update (or hide) the gold sufficiency display.
+-- @param totalCost (number|nil) Total cost of flippable rows in copper, or nil to hide.
+function FlipScan.Hooks:UpdateGoldDisplay(totalCost)
+    local text = GetOrCreateGoldText()
+    if not text then return end
+
+    if totalCost and totalCost > 0 then
+        local playerGold = GetMoney()
+        local canAfford = playerGold >= totalCost
+        local msg = string.format(
+            "Buy all: %s | Your gold: %s",
+            FlipScan.Calculator.FormatGold(totalCost),
+            FlipScan.Calculator.FormatGold(playerGold)
+        )
+        text:SetText(msg)
+        if canAfford then
+            text:SetTextColor(0, 1, 0, 1)  -- Green
+        else
+            text:SetTextColor(1, 0, 0, 1)  -- Red
+        end
         text:Show()
     else
         text:Hide()

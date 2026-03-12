@@ -66,10 +66,21 @@ function FlipScan.SettingsPanel:CreatePanel()
     -- Slider: Minimum margin %
     ---------------------------------------------------------------
     local marginSlider = self:CreateSlider(
-        panel, "Minimum Profit Margin (%)", yOffset,
+        panel, "FlipScanMarginSlider", "Minimum Profit Margin (%)", yOffset,
         0, 50, 0.5,
         function() return FlipScan.Config:Get("minMarginPercent") end,
         function(value) FlipScan.Config:Set("minMarginPercent", value) end
+    )
+    yOffset = yOffset - 60
+
+    ---------------------------------------------------------------
+    -- Slider: Marginal margin %
+    ---------------------------------------------------------------
+    local marginalSlider = self:CreateSlider(
+        panel, "FlipScanMarginalSlider", "Marginal Margin (%)", yOffset,
+        0, 50, 0.5,
+        function() return FlipScan.Config:Get("marginalMarginPercent") end,
+        function(value) FlipScan.Config:Set("marginalMarginPercent", value) end
     )
     yOffset = yOffset - 60
 
@@ -86,6 +97,7 @@ function FlipScan.SettingsPanel:CreatePanel()
         enableCB:SetChecked(FlipScan.Config:Get("enabled"))
         tooltipCB:SetChecked(FlipScan.Config:Get("showTooltipDetail"))
         marginSlider:SetValue(FlipScan.Config:Get("minMarginPercent"))
+        marginalSlider:SetValue(FlipScan.Config:Get("marginalMarginPercent"))
     end)
 
     -- Refresh controls when the panel is shown
@@ -93,6 +105,7 @@ function FlipScan.SettingsPanel:CreatePanel()
         enableCB:SetChecked(FlipScan.Config:Get("enabled"))
         tooltipCB:SetChecked(FlipScan.Config:Get("showTooltipDetail"))
         marginSlider:SetValue(FlipScan.Config:Get("minMarginPercent"))
+        marginalSlider:SetValue(FlipScan.Config:Get("marginalMarginPercent"))
     end)
 
     return panel
@@ -115,8 +128,8 @@ function FlipScan.SettingsPanel:CreateCheckbox(parent, label, yOffset, getter, s
 end
 
 --- Create a labeled slider with value display.
-function FlipScan.SettingsPanel:CreateSlider(parent, label, yOffset, minVal, maxVal, step, getter, setter)
-    local slider = CreateFrame("Slider", "FlipScanMarginSlider", parent, "OptionsSliderTemplate")
+function FlipScan.SettingsPanel:CreateSlider(parent, sliderName, label, yOffset, minVal, maxVal, step, getter, setter)
+    local slider = CreateFrame("Slider", sliderName, parent, "OptionsSliderTemplate")
     slider:SetPoint("TOPLEFT", 20, yOffset)
     slider:SetSize(200, 17)
     slider:SetMinMaxValues(minVal, maxVal)
