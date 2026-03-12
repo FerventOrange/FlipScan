@@ -13,6 +13,33 @@ function FlipScan.Commands:Init()
     FlipScan:Debug("Slash commands registered: /flipscan, /fs")
 end
 
+--- Extract an item link from a raw message string.
+-- Item links contain pipe characters and mixed case, so they must be
+-- extracted from the original (non-lowercased) message.
+-- @param msg (string) The raw slash command message.
+-- @return (string|nil) The item link, or nil.
+local function ExtractItemLinkFromMsg(msg)
+    if not msg then return nil end
+    return msg:match("|c%x+|Hitem:.-|h%[.-%]|h|r")
+end
+
+--- Extract an item ID from an item link string.
+-- @param itemLink (string) A WoW item link.
+-- @return (number|nil) The item ID.
+local function ExtractItemIDFromLink(itemLink)
+    if not itemLink then return nil end
+    local id = itemLink:match("item:(%d+)")
+    return id and tonumber(id) or nil
+end
+
+--- Extract the item name from an item link string.
+-- @param itemLink (string) A WoW item link.
+-- @return (string|nil) The item name.
+local function ExtractItemNameFromLink(itemLink)
+    if not itemLink then return nil end
+    return itemLink:match("%[(.-)%]")
+end
+
 --- Parse and dispatch a slash command.
 -- @param msg (string) Everything after "/flipscan ", e.g. "margin 10"
 function FlipScan.Commands:Handle(msg)
@@ -60,6 +87,15 @@ function FlipScan.Commands:Handle(msg)
             FlipScan:Print("Tooltip detail disabled.")
         end
 
+    elseif cmd == "ignore" then
+        self:HandleIgnore(msg)
+
+    elseif cmd == "unignore" then
+        self:HandleUnignore(msg)
+
+    elseif cmd == "ignorelist" then
+        self:HandleIgnoreList()
+
     elseif cmd == "reset" then
         FlipScan.Config:ResetToDefaults()
 
@@ -80,12 +116,83 @@ function FlipScan.Commands:Handle(msg)
     end
 end
 
+--- Add an item to the ignore list.
+-- @param msg (string) Raw slash command message containing an item link.
+function FlipScan.Commands:HandleIgnore(msg)
+    local itemLink = ExtractItemLinkFromMsg(msg)
+    if not itemLink then
+        FlipScan:Print("Usage: /flipscan ignore [Item Link]  (shift-click an item)")
+        return
+    end
+
+    local itemID = ExtractItemIDFromLink(itemLink)
+    if not itemID then
+        FlipScan:Print("Could not extract item ID from link.")
+        return
+    end
+
+    local itemName = ExtractItemNameFromLink(itemLink) or tostring(itemID)
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
+    ignoredItems[itemID] = itemName
+    FlipScan.Config:Set("ignoredItems", ignoredItems)
+    FlipScan:Print("Ignoring " .. itemLink .. ".")
+end
+
+--- Remove an item from the ignore list.
+-- @param msg (string) Raw slash command message containing an item link.
+function FlipScan.Commands:HandleUnignore(msg)
+    local itemLink = ExtractItemLinkFromMsg(msg)
+    if not itemLink then
+        FlipScan:Print("Usage: /flipscan unignore [Item Link]  (shift-click an item)")
+        return
+    end
+
+    local itemID = ExtractItemIDFromLink(itemLink)
+    if not itemID then
+        FlipScan:Print("Could not extract item ID from link.")
+        return
+    end
+
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
+    if not ignoredItems[itemID] then
+        FlipScan:Print(itemLink .. " is not on the ignore list.")
+        return
+    end
+
+    ignoredItems[itemID] = nil
+    FlipScan.Config:Set("ignoredItems", ignoredItems)
+    FlipScan:Print("No longer ignoring " .. itemLink .. ".")
+end
+
+--- Print all items on the ignore list.
+function FlipScan.Commands:HandleIgnoreList()
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
+    local count = 0
+    for _ in pairs(ignoredItems) do count = count + 1 end
+
+    if count == 0 then
+        FlipScan:Print("Ignore list is empty.")
+        return
+    end
+
+    FlipScan:Print("Ignored items (" .. count .. "):")
+    for itemID, itemName in pairs(ignoredItems) do
+        FlipScan:Print("  " .. itemName .. " (ID: " .. itemID .. ")")
+    end
+end
+
 --- Print current status summary.
 function FlipScan.Commands:PrintStatus()
+    local ignoredItems = FlipScan.Config:Get("ignoredItems") or {}
+    local ignoreCount = 0
+    for _ in pairs(ignoredItems) do ignoreCount = ignoreCount + 1 end
+
     FlipScan:Print("v" .. FlipScan.version .. " Status:")
     FlipScan:Print("  Enabled: " .. tostring(FlipScan.Config:Get("enabled")))
     FlipScan:Print("  Min Margin: " .. FlipScan.Config:Get("minMarginPercent") .. "%")
+    FlipScan:Print("  Marginal Margin: " .. FlipScan.Config:Get("marginalMarginPercent") .. "%")
     FlipScan:Print("  Tooltip Detail: " .. tostring(FlipScan.Config:Get("showTooltipDetail")))
+    FlipScan:Print("  Ignored Items: " .. ignoreCount)
     FlipScan:Print("  Debug Mode: " .. tostring(FlipScan.debugMode))
     FlipScan:Print("  Active Overlays: " .. (FlipScan.Overlay.GetActiveCount and FlipScan.Overlay:GetActiveCount() or 0))
     FlipScan:Print("Type /flipscan help for commands.")
@@ -94,11 +201,14 @@ end
 --- Print available commands.
 function FlipScan.Commands:PrintUsage()
     FlipScan:Print("Commands:")
-    FlipScan:Print("  /flipscan          - Show status")
-    FlipScan:Print("  /flipscan on       - Enable FlipScan")
-    FlipScan:Print("  /flipscan off      - Disable FlipScan")
-    FlipScan:Print("  /flipscan margin # - Set min profit margin %")
-    FlipScan:Print("  /flipscan tooltip  - Toggle tooltip detail")
-    FlipScan:Print("  /flipscan reset    - Reset all settings")
-    FlipScan:Print("  /flipscan debug    - Toggle debug output")
+    FlipScan:Print("  /flipscan              - Show status")
+    FlipScan:Print("  /flipscan on           - Enable FlipScan")
+    FlipScan:Print("  /flipscan off          - Disable FlipScan")
+    FlipScan:Print("  /flipscan margin #     - Set min profit margin %")
+    FlipScan:Print("  /flipscan tooltip      - Toggle tooltip detail")
+    FlipScan:Print("  /flipscan ignore [Link]   - Ignore an item (shift-click)")
+    FlipScan:Print("  /flipscan unignore [Link] - Stop ignoring an item")
+    FlipScan:Print("  /flipscan ignorelist   - List ignored items")
+    FlipScan:Print("  /flipscan reset        - Reset all settings")
+    FlipScan:Print("  /flipscan debug        - Toggle debug output")
 end

@@ -9,7 +9,10 @@ local defaults = {
     minMarginPercent = 2.5,         -- Min net profit % after AH cut to flag as flippable
     minProfitGold = 0,              -- Min absolute profit in gold (0 = disabled)
     highlightColor = { r = 0, g = 1, b = 0, a = 0.4 },   -- Green tint for profitable flips
+    marginalColor  = { r = 1, g = 0.8, b = 0, a = 0.4 },  -- Yellow tint for marginal flips
     noFlipColor    = { r = 1, g = 0, b = 0, a = 0.4 },    -- Red tint for money-losing flips
+    marginalMarginPercent = 0.5,    -- Lower bound for yellow (marginal) overlay
+    ignoredItems = {},              -- Table of ignored itemIDs (keyed by itemID → item name)
     showTooltipDetail = true,       -- Inject net profit breakdown into item tooltips
     enabled = true,                 -- Master on/off toggle
     maxPriceTiers = 50,             -- Cap price tiers to exclude outlier joke listings

@@ -54,11 +54,14 @@ function FlipScan.Overlay:ApplyRowOverlay(rowFrame, flipData)
     if not rowFrame then return end
 
     local overlay = GetOrCreateOverlay(rowFrame)
-    local goodColor = FlipScan.Config:Get("highlightColor")
-    local badColor  = FlipScan.Config:Get("noFlipColor")
+    local goodColor     = FlipScan.Config:Get("highlightColor")
+    local marginalColor = FlipScan.Config:Get("marginalColor")
+    local badColor      = FlipScan.Config:Get("noFlipColor")
 
     if flipData.isFlippable then
         overlay.texture:SetColorTexture(goodColor.r, goodColor.g, goodColor.b, goodColor.a)
+    elseif flipData.isMarginal then
+        overlay.texture:SetColorTexture(marginalColor.r, marginalColor.g, marginalColor.b, marginalColor.a)
     else
         overlay.texture:SetColorTexture(badColor.r, badColor.g, badColor.b, badColor.a)
     end
