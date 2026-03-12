@@ -79,7 +79,6 @@ function FlipScan.Hooks:HookAuctionator()
     end
 
     if hookedCount > 0 then
-        self._auctionatorHooked = true
         FlipScan:Debug("Hooked " .. hookedCount .. " Auctionator row mixin(s).")
     end
 end
@@ -261,7 +260,6 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
         end
         pendingAuctionatorRows = {}
         self:UpdateSellAtDisplay(nil)
-        self:UpdateGoldDisplay(nil)
         return
     end
 
@@ -332,17 +330,12 @@ function FlipScan.Hooks:ApplyAuctionatorBatch()
                 end
             end
 
-            -- Apply overlays and sum cost of flippable rows
-            local totalFlipCost = 0
+            -- Apply overlays
             for i, entry in ipairs(rows) do
                 FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
-                if flipResults[i].isFlippable then
-                    totalFlipCost = totalFlipCost + (entry.buyoutPerItem * entry.quantity)
-                end
             end
 
             self:UpdateSellAtDisplay(sellPoint)
-            self:UpdateGoldDisplay(totalFlipCost > 0 and totalFlipCost or nil)
         end
     end
 
@@ -365,7 +358,6 @@ function FlipScan.Hooks:HookBlizzardAH()
         if event == "AUCTION_HOUSE_CLOSED" then
             FlipScan.Overlay:HideAll()
             FlipScan.Hooks:UpdateSellAtDisplay(nil)
-            FlipScan.Hooks:UpdateGoldDisplay(nil)
             return
         end
 
@@ -388,8 +380,6 @@ function FlipScan.Hooks:HookBlizzardAH()
         -- per item, not individual listings. There's no listing depth to
         -- compute a meaningful anchor from.
     end)
-
-    FlipScan.Hooks.hookFrame = hookFrame
 end
 
 --- Hook Blizzard's ScrollBox scroll events to refresh overlays on scroll.
@@ -637,21 +627,16 @@ function FlipScan.Hooks:ScanBlizzardItemList(itemList, debugLabel)
         end
     end
 
-    -- Pass 3: Apply overlays and sum cost of flippable rows
-    local totalFlipCost = 0
+    -- Pass 3: Apply overlays
     for i, entry in ipairs(rowEntries) do
         if flipResults[i] and flipResults[i] ~= "ignored" then
             FlipScan.Overlay:ApplyRowOverlay(entry.rowFrame, flipResults[i])
-            if flipResults[i].isFlippable then
-                totalFlipCost = totalFlipCost + (entry.buyoutPerItem * entry.quantity)
-            end
         else
             FlipScan.Overlay:ClearRowOverlay(entry.rowFrame)
         end
     end
 
     self:UpdateSellAtDisplay(lastSellPoint)
-    self:UpdateGoldDisplay(totalFlipCost > 0 and totalFlipCost or nil)
 end
 
 -----------------------------------------------------------------------
@@ -692,72 +677,6 @@ function FlipScan.Hooks:UpdateSellAtDisplay(marketValue)
 
     if marketValue and marketValue > 0 then
         text:SetText("FlipScan: Sell at " .. FlipScan.Calculator.FormatGold(marketValue))
-        text:Show()
-    else
-        text:Hide()
-    end
-end
-
------------------------------------------------------------------------
--- Gold Sufficiency Display (below the buy button)
------------------------------------------------------------------------
-
---- Get or create the gold sufficiency FontString below the AH buy button.
-local function GetOrCreateGoldText()
-    if FlipScan.Hooks._goldText then
-        return FlipScan.Hooks._goldText
-    end
-
-    -- Try to anchor below the Blizzard commodity buy button
-    local buyButton = nil
-    if AuctionHouseFrame and AuctionHouseFrame.CommoditiesBuyFrame then
-        local buyDisplay = AuctionHouseFrame.CommoditiesBuyFrame.BuyDisplay
-        if buyDisplay and buyDisplay.BuyButton then
-            buyButton = buyDisplay.BuyButton
-        end
-    end
-    if not buyButton and AuctionHouseFrame and AuctionHouseFrame.ItemBuyFrame then
-        local buyoutFrame = AuctionHouseFrame.ItemBuyFrame.BuyoutFrame
-        if buyoutFrame and buyoutFrame.BuyoutButton then
-            buyButton = buyoutFrame.BuyoutButton
-        end
-    end
-
-    local parent = buyButton or (AuctionHouseFrame and AuctionHouseFrame.CommoditiesBuyFrame) or AuctionHouseFrame
-    if not parent then return nil end
-
-    local text = parent:GetParent():CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    if buyButton then
-        text:SetPoint("TOP", buyButton, "BOTTOM", 0, -4)
-    else
-        text:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 10, -16)
-    end
-    text:Hide()
-
-    FlipScan.Hooks._goldText = text
-    return text
-end
-
---- Update (or hide) the gold sufficiency display.
--- @param totalCost (number|nil) Total cost of flippable rows in copper, or nil to hide.
-function FlipScan.Hooks:UpdateGoldDisplay(totalCost)
-    local text = GetOrCreateGoldText()
-    if not text then return end
-
-    if totalCost and totalCost > 0 then
-        local playerGold = GetMoney()
-        local canAfford = playerGold >= totalCost
-        local msg = string.format(
-            "Buy all: %s | Your gold: %s",
-            FlipScan.Calculator.FormatGold(totalCost),
-            FlipScan.Calculator.FormatGold(playerGold)
-        )
-        text:SetText(msg)
-        if canAfford then
-            text:SetTextColor(0, 1, 0, 1)  -- Green
-        else
-            text:SetTextColor(1, 0, 0, 1)  -- Red
-        end
         text:Show()
     else
         text:Hide()

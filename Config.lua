@@ -93,8 +93,3 @@ function FlipScan.Config:ResetToDefaults()
     FlipScanDB = DeepCopyDefaults(defaults)
     FlipScan:Print("All settings reset to defaults.")
 end
-
---- Return a copy of the defaults table (for display / comparison).
-function FlipScan.Config:GetDefaults()
-    return DeepCopyDefaults(defaults)
-end
